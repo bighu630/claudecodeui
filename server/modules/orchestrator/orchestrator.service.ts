@@ -471,8 +471,12 @@ function compareTreeNodes(a: OrchestratorSession, b: OrchestratorSession): numbe
   if (typeDiff !== 0) {
     return typeDiff;
   }
+  // Running sessions first
+  const aRunning = a.run_status === 'running' ? 0 : 1;
+  const bRunning = b.run_status === 'running' ? 0 : 1;
+  if (aRunning !== bRunning) return aRunning - bRunning;
 
-  return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+  return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
 }
 
 function buildTree(rows: OrchestratorSession[]): SessionTreeNode[] {

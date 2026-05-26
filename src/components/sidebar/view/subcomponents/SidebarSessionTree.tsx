@@ -25,6 +25,20 @@ interface Props {
   onSelect: (session: SessionTreeNode) => void;
 }
 
+
+/** Mirror of the server-side sort: running first, then created_at ascending. */
+function sortTreeNodes(nodes: SessionTreeNode[]): SessionTreeNode[] {
+  return [...nodes].sort((a, b) => {
+    const aRunning = a.run_status === 'running' ? 0 : 1;
+    const bRunning = b.run_status === 'running' ? 0 : 1;
+    if (aRunning !== bRunning) return aRunning - bRunning;
+    return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+  }).map(node => ({
+    ...node,
+    children: node.children.length > 0 ? sortTreeNodes(node.children) : node.children,
+  }));
+}
+
 function collectDefaultExpandedIds(nodes: SessionTreeNode[]): Set<string> {
   const expandedIds = new Set<string>();
 
@@ -66,6 +80,7 @@ function collectAncestorIds(nodes: SessionTreeNode[], targetId: string): string[
 export default function SidebarSessionTree({ nodes, selectedSessionId, onSelect }: Props) {
   const defaultExpandedIds = useMemo(() => collectDefaultExpandedIds(nodes), [nodes]);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(defaultExpandedIds);
+  const sortedNodes = useMemo(() => sortTreeNodes(nodes), [nodes]);
 
   useEffect(() => {
     setExpandedIds((previous) => {
@@ -114,7 +129,7 @@ export default function SidebarSessionTree({ nodes, selectedSessionId, onSelect 
 
   return (
     <div className="space-y-0.5">
-      {nodes.map(node => (
+      {sortedNodes.map(node => (
         <SessionTreeNodeItem
           key={node.id}
           node={node}
