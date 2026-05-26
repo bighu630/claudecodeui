@@ -14,7 +14,7 @@ import {
   finalizeOrchestratorRun,
   getProjectKnowledge,
   getSession,
-  getSessionByExternalSessionId,
+  getSessionByRuntimeSessionId,
   getSessionEvents,
   getSessionTree,
   getTaskSpec,
@@ -211,8 +211,8 @@ test('materializeChildSessionFromTool and bindChildRuntimeFromTool bridge namesp
       toolId: 'tool-worker-1',
       runtimeInfo: { id: 'worker-runtime-1', nickname: 'worker-1' },
     });
-    assert.equal(boundWorker?.external_session_id, 'worker-runtime-1');
-    assert.equal(getSession(worker.id)?.external_session_id, 'worker-runtime-1');
+    assert.equal(boundWorker?.runtime_session_id, 'worker-runtime-1');
+    assert.equal(getSession(worker.id)?.runtime_session_id, 'worker-runtime-1');
   });
 });
 
@@ -233,7 +233,7 @@ test('tech_lead-created feature_lead sessions enter the tree before runtime bind
     });
 
     assert.ok(featureLead);
-    assert.equal(featureLead.external_session_id, null);
+    assert.equal(featureLead.runtime_session_id, null);
 
     const tree = getSessionTree(projectId);
     const techLeadNode = tree.find((node) => node.id === techLead.id);
@@ -242,7 +242,7 @@ test('tech_lead-created feature_lead sessions enter the tree before runtime bind
     const featureLeadNode = techLeadNode.children.find((node) => node.id === featureLead.id);
     assert.ok(featureLeadNode);
     assert.equal(featureLeadNode.type, 'feature_lead');
-    assert.equal(featureLeadNode.external_session_id, null);
+    assert.equal(featureLeadNode.runtime_session_id, null);
   });
 });
 
@@ -274,7 +274,7 @@ test('feature_lead-created worker sessions enter the tree and remain traceable a
     });
 
     assert.ok(worker);
-    assert.equal(worker.external_session_id, null);
+    assert.equal(worker.runtime_session_id, null);
 
     const beforeBindTree = getSessionTree(projectId);
     const techLeadNode = beforeBindTree.find((node) => node.id === techLead.id);
@@ -291,8 +291,8 @@ test('feature_lead-created worker sessions enter the tree and remain traceable a
     });
 
     assert.ok(boundWorker);
-    assert.equal(boundWorker.external_session_id, 'worker-runtime-tree-1');
-    assert.equal(getSessionByExternalSessionId('worker-runtime-tree-1')?.id, worker.id);
+    assert.equal(boundWorker.runtime_session_id, 'worker-runtime-tree-1');
+    assert.equal(getSessionByRuntimeSessionId('worker-runtime-tree-1')?.id, worker.id);
 
     const statusEvents = getSessionEvents(worker.id).filter((event) => event.event_type === 'status_changed');
     assert.ok(statusEvents.length > 0);
@@ -308,7 +308,7 @@ test('feature_lead-created worker sessions enter the tree and remain traceable a
     assert.ok(reboundFeatureLeadNode);
     const reboundWorkerNode = reboundFeatureLeadNode.children.find((node) => node.id === worker.id);
     assert.ok(reboundWorkerNode);
-    assert.equal(reboundWorkerNode.external_session_id, 'worker-runtime-tree-1');
+    assert.equal(reboundWorkerNode.runtime_session_id, 'worker-runtime-tree-1');
   });
 });
 
@@ -336,7 +336,7 @@ test('materializeChildSessionFromTool honors explicit provider/model overrides f
   });
 });
 
-test('materializeAndBindChildSessionFromTool writes external_session_id immediately when runtime id is returned with delegation', async () => {
+test('materializeAndBindChildSessionFromTool writes runtime_session_id immediately when runtime id is returned with delegation', async () => {
   await withIsolatedDatabase(() => {
     const projectId = createProjectFixture('/workspace/direct-bind-project');
     const { techLead } = ensureProjectOrchestratorBootstrap({
@@ -358,8 +358,8 @@ test('materializeAndBindChildSessionFromTool writes external_session_id immediat
 
     assert.ok(featureLead);
     assert.equal(featureLead.type, 'feature_lead');
-    assert.equal(featureLead.external_session_id, 'feature-runtime-direct-1');
-    assert.equal(getSession(featureLead.id)?.external_session_id, 'feature-runtime-direct-1');
+    assert.equal(featureLead.runtime_session_id, 'feature-runtime-direct-1');
+    assert.equal(getSession(featureLead.id)?.runtime_session_id, 'feature-runtime-direct-1');
   });
 });
 
@@ -385,15 +385,15 @@ test('materializeAndBindChildSessionFromTool accepts functions.spawn_agent tool 
 
     assert.ok(featureLead);
     assert.equal(featureLead.type, 'feature_lead');
-    assert.equal(featureLead.external_session_id, 'feature-runtime-functions-1');
-    assert.equal(getSessionByExternalSessionId('feature-runtime-functions-1')?.id, featureLead.id);
+    assert.equal(featureLead.runtime_session_id, 'feature-runtime-functions-1');
+    assert.equal(getSessionByRuntimeSessionId('feature-runtime-functions-1')?.id, featureLead.id);
 
     const tree = getSessionTree(projectId);
     const techLeadNode = tree.find((node) => node.id === techLead.id);
     assert.ok(techLeadNode);
     const featureLeadNode = techLeadNode.children.find((node) => node.id === featureLead.id);
     assert.ok(featureLeadNode);
-    assert.equal(featureLeadNode.external_session_id, 'feature-runtime-functions-1');
+    assert.equal(featureLeadNode.runtime_session_id, 'feature-runtime-functions-1');
   });
 });
 
@@ -415,7 +415,7 @@ test('materializeChildSessionFromTool treats collab_tool_call as a materializabl
 
     assert.ok(featureLead);
     assert.equal(featureLead.type, 'feature_lead');
-    assert.equal(featureLead.external_session_id, null);
+    assert.equal(featureLead.runtime_session_id, null);
 
     const tree = getSessionTree(projectId);
     const techLeadNode = tree.find((node) => node.id === techLead.id);
@@ -487,7 +487,7 @@ test('materializeAndBindChildSessionFromTool auto-runs child sessions and only e
       const beforeStart = getSession(session.id);
       assert.ok(beforeStart);
       assert.equal(beforeStart.run_status, 'queued');
-      assert.equal(beforeStart.external_session_id, null);
+      assert.equal(beforeStart.runtime_session_id, null);
 
       const preparedCommand = prepareOrchestratorCommand(session.id, startupMessage);
       assert.equal(preparedCommand, startupMessage);
@@ -518,7 +518,7 @@ test('materializeAndBindChildSessionFromTool auto-runs child sessions and only e
       assert.ok(featureLead);
       assert.equal(featureLead.type, 'feature_lead');
       assert.equal(featureLead.run_status, 'queued');
-      assert.equal(featureLead.external_session_id, null);
+      assert.equal(featureLead.runtime_session_id, null);
 
       await flushMicrotasks();
 
@@ -529,7 +529,7 @@ test('materializeAndBindChildSessionFromTool auto-runs child sessions and only e
       const runningSession = getSession(featureLead.id);
       assert.ok(runningSession);
       assert.equal(runningSession.run_status, 'running');
-      assert.equal(runningSession.external_session_id, 'feature-autorun-runtime-1');
+      assert.equal(runningSession.runtime_session_id, 'feature-autorun-runtime-1');
 
       if (control.releaseRun) {
         control.releaseRun();
@@ -540,7 +540,7 @@ test('materializeAndBindChildSessionFromTool auto-runs child sessions and only e
       assert.ok(completedSession);
       assert.equal(completedSession.run_status, 'idle');
       assert.equal(completedSession.last_run_summary, 'child auto-run completed');
-      assert.equal(completedSession.external_session_id, 'feature-autorun-runtime-1');
+      assert.equal(completedSession.runtime_session_id, 'feature-autorun-runtime-1');
     } finally {
       registerChildSessionAutoRunExecutor(null);
     }

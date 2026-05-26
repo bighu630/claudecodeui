@@ -22,7 +22,7 @@ export default function SessionPanel({ session, taskSpec }: Props) {
           <Row label="Lifecycle" value={session.lifecycle_status} />
           <Row label="Run Status" value={session.run_status} />
           <Row label="Interaction" value={session.interaction_mode} />
-          <Row label="External ID" value={session.external_session_id || '-'} />
+          <Row label="Runtime ID" value={session.runtime_session_id || '-'} />
           <Row label="Created" value={session.created_at} />
         </dl>
       </section>

@@ -17,7 +17,7 @@ function createBootstrapSession(overrides: Partial<OrchestratorSession> = {}): O
     interaction_mode: 'conversational',
     lifecycle_status: 'active',
     run_status: 'queued',
-    external_session_id: null,
+    runtime_session_id: null,
     system_prompt: 'SYSTEM_BACKGROUND',
     role_prompt: 'ROLE_PROMPT',
     project_knowledge_snapshot: '',

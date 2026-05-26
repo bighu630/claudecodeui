@@ -36,9 +36,9 @@ router.get('/sessions/:id', (req, res) => {
   }
 });
 
-router.get('/runtime/:externalSessionId', (req, res) => {
+router.get('/runtime/:runtimeSessionId', (req, res) => {
   try {
-    const session = orch.getSessionByExternalSessionId(req.params.externalSessionId);
+    const session = orch.getSessionByRuntimeSessionId(req.params.runtimeSessionId);
     if (!session || !orch.isSessionVisibleInTree(session)) {
       return res.status(404).json({ error: 'Session not found' });
     }
@@ -103,11 +103,11 @@ router.post('/sessions', (req, res) => {
 
 router.patch('/sessions/:id/status', (req, res) => {
   try {
-    const { lifecycle_status, run_status, external_session_id, summary_text, last_run_summary, last_error_summary } = req.body as Record<string, unknown>;
+    const { lifecycle_status, run_status, runtime_session_id, summary_text, last_run_summary, last_error_summary } = req.body as Record<string, unknown>;
     orch.updateSessionStatus(req.params.id, {
       lifecycle_status: lifecycle_status as OrchestratorSession['lifecycle_status'] | undefined,
       run_status: run_status as OrchestratorSession['run_status'] | undefined,
-      external_session_id: external_session_id as string | undefined,
+      runtime_session_id: runtime_session_id as string | undefined,
       summary_text: summary_text as string | undefined,
       last_run_summary: last_run_summary as string | undefined,
       last_error_summary: last_error_summary as string | undefined,

@@ -1,7 +1,7 @@
 {
-  "name": "CloudCLI UI",
-  "short_name": "CloudCLI UI",
-  "description": "CloudCLI UI web application",
+  "name": "CodeAgent UI",
+  "short_name": "CodeAgent UI",
+  "description": "CodeAgent UI web application",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",

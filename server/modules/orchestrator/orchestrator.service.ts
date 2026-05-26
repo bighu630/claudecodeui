@@ -20,7 +20,7 @@ export interface OrchestratorSession {
   interaction_mode: 'conversational' | 'managed';
   lifecycle_status: 'active' | 'completed' | 'failed' | 'archived';
   run_status: 'idle' | 'queued' | 'running' | 'waiting_input' | 'blocked';
-  external_session_id: string | null;
+  runtime_session_id: string | null;
   system_prompt: string;
   role_prompt: string;
   project_knowledge_snapshot: string;
@@ -102,7 +102,7 @@ const ROOT_SESSION_GOALS: Record<BootstrapRootSessionType, { title: string; goal
   },
 };
 
-const MATERIALIZABLE_TOOL_NAMES = new Set(['Task', 'spawn_agent', 'collab_tool_call']);
+const MATERIALIZABLE_TOOL_NAMES = new Set(['Task', 'collab_tool_call']);
 let childSessionAutoRunExecutor: ChildSessionAutoRunExecutor | null = null;
 
 export function canCreateChild(parentType: SessionType, childType: SessionType): boolean {
@@ -325,10 +325,10 @@ export function getSession(id: string): OrchestratorSession | undefined {
   return db.prepare('SELECT * FROM orchestrator_sessions WHERE id = ?').get(id) as OrchestratorSession | undefined;
 }
 
-export function getSessionByExternalSessionId(externalSessionId: string): OrchestratorSession | undefined {
+export function getSessionByRuntimeSessionId(externalSessionId: string): OrchestratorSession | undefined {
   const db = getDb();
   return db.prepare(
-    "SELECT * FROM orchestrator_sessions WHERE external_session_id = ? AND lifecycle_status != 'archived' ORDER BY updated_at DESC, created_at DESC LIMIT 1"
+    "SELECT * FROM orchestrator_sessions WHERE runtime_session_id = ? AND lifecycle_status != 'archived' ORDER BY updated_at DESC, created_at DESC LIMIT 1"
   ).get(externalSessionId) as OrchestratorSession | undefined;
 }
 
@@ -376,7 +376,7 @@ export function initializeSession(id: string, provider: string, model?: string):
 
 export function updateSessionStatus(
   id: string,
-  updates: Partial<Pick<OrchestratorSession, 'lifecycle_status' | 'run_status' | 'external_session_id' | 'summary_text' | 'last_run_summary' | 'last_error_summary'>>,
+  updates: Partial<Pick<OrchestratorSession, 'lifecycle_status' | 'run_status' | 'runtime_session_id' | 'summary_text' | 'last_run_summary' | 'last_error_summary'>>,
 ): void {
   const db = getDb();
   const sets: string[] = [];
@@ -390,9 +390,9 @@ export function updateSessionStatus(
     sets.push('run_status = ?');
     values.push(updates.run_status);
   }
-  if (updates.external_session_id !== undefined) {
-    sets.push('external_session_id = ?');
-    values.push(updates.external_session_id);
+  if (updates.runtime_session_id !== undefined) {
+    sets.push('runtime_session_id = ?');
+    values.push(updates.runtime_session_id);
   }
   if (updates.summary_text !== undefined) {
     sets.push('summary_text = ?');
@@ -570,7 +570,6 @@ export function getTaskSpecsByCreator(created_by_session_id: string): WorkerTask
 }
 
 export function onWorkerCompleted(workerSessionId: string, success: boolean, runSummary: string, errorSummary?: string): void {
-  const db = getDb();
   const worker = getSession(workerSessionId);
   if (!worker || worker.type !== 'worker') return;
 
@@ -657,7 +656,7 @@ export function prepareOrchestratorCommand(orchestratorSessionId: string, userCo
     lifecycle_status: session.lifecycle_status === 'archived' ? 'active' : session.lifecycle_status,
   });
 
-  const needsBootstrapPrompt = !session.external_session_id;
+  const needsBootstrapPrompt = !session.runtime_session_id;
   const isPrecomposedBootstrap = userCommand.includes(ORCHESTRATOR_BOOTSTRAP_OPEN_TAG)
     && userCommand.includes(ORCHESTRATOR_BOOTSTRAP_CLOSE_TAG)
     && userCommand.includes(ORCHESTRATOR_USER_MESSAGE_OPEN_TAG)
@@ -730,7 +729,7 @@ export function getSessionEvents(sessionId: string, limit: number = 50): Array<{
 }
 
 export function bindExternalSessionId(localSessionId: string, externalSessionId: string): void {
-  updateSessionStatus(localSessionId, { external_session_id: externalSessionId });
+  updateSessionStatus(localSessionId, { runtime_session_id: externalSessionId });
 }
 
 export function registerChildSessionAutoRunExecutor(executor: ChildSessionAutoRunExecutor | null): void {
@@ -802,9 +801,11 @@ function deriveChildSessionType(parentType: SessionType): SessionType | null {
 
 function isMaterializableTool(toolName: string | null | undefined, toolInput: unknown): boolean {
   if (getToolNameVariants(toolName).some((variant) => MATERIALIZABLE_TOOL_NAMES.has(variant))) {
+    console.log("[DEBUG][orchestrator] isMaterializableTool=true via toolName:", toolName);
     return true;
   }
 
+  console.log("[DEBUG][orchestrator] isMaterializableTool checking input for role fields, toolName:", toolName);
   const input = readToolInputRecord(toolInput);
   if (!input) {
     return false;
@@ -817,6 +818,7 @@ function isMaterializableTool(toolName: string | null | undefined, toolInput: un
     input.orchestrator_role,
   ].find((candidate) => typeof candidate === 'string' && candidate.trim());
 
+  if (typeof explicitRole === "string") { console.log("[DEBUG][orchestrator] isMaterializableTool=true via input." + explicitRole + " for toolName:", toolName); }
   return typeof explicitRole === 'string';
 }
 
@@ -966,7 +968,7 @@ function extractRuntimeSessionId(
   const candidates = [
     record.sessionId,
     record.session_id,
-    record.external_session_id,
+    record.runtime_session_id,
     record.threadId,
     record.thread_id,
     record.agentId,
@@ -1009,8 +1011,8 @@ async function defaultChildSessionAutoRunExecutor(params: ChildSessionAutoRunPar
   const commonOptions = {
     cwd: workingDirectory,
     projectPath: workingDirectory,
-    sessionId: session.external_session_id ?? undefined,
-    resume: Boolean(session.external_session_id),
+    sessionId: session.runtime_session_id ?? undefined,
+    resume: Boolean(session.runtime_session_id),
     model: session.model ?? undefined,
     sessionSummary: session.title,
     orchestratorSessionId: session.id,
@@ -1125,11 +1127,13 @@ export function materializeChildSessionFromTool(
     ? params.toolId.trim()
     : null;
   if (!sourceToolId) {
+    console.log("[DEBUG][orchestrator] SKIP: no sourceToolId for toolName=" + params.toolName);
     return null;
   }
 
   const existing = findMaterializedChildSession(parentSessionId, sourceToolId);
   if (existing) {
+    console.log("[DEBUG][orchestrator] DEDUP hit: reusing existing child session for toolId=" + sourceToolId + " existingId=" + existing.id);
     return existing;
   }
 
@@ -1138,6 +1142,7 @@ export function materializeChildSessionFromTool(
   const explicitProvider = deriveExplicitProvider(input);
   const explicitModel = deriveExplicitModel(input);
 
+  console.log("[DEBUG][orchestrator] CREATING child session: parentId=" + parentSession.id + " childType=" + childType + " toolName=" + params.toolName + " toolId=" + params.toolId);
   const session = createSession({
     project_id: parentSession.project_id,
     parent_id: parentSession.id,
@@ -1203,7 +1208,11 @@ export function materializeAndBindChildSessionFromTool(
     ? params.toolId.trim()
     : null;
   if (!sourceToolId || params.runtimeInfo === undefined || params.runtimeInfo === null) {
-    if (!session.external_session_id) {
+  console.log('[DEBUG][orchestrator] materializeAndBind: sessionId=%s runtimeInfo=%s runtime_session_id=%s',
+    session.id,
+    params.runtimeInfo === undefined ? 'UNDEFINED' : params.runtimeInfo === null ? 'NULL' : 'PRESENT',
+    session.runtime_session_id || 'null');
+    if (!session.runtime_session_id) {
       queueChildSessionAutoRun(session.id);
     }
     return session;
@@ -1214,13 +1223,12 @@ export function materializeAndBindChildSessionFromTool(
     runtimeInfo: params.runtimeInfo,
   }) ?? getSession(session.id) ?? session;
 
-  if (!bound.external_session_id) {
-    queueChildSessionAutoRun(bound.id);
+  if (!bound.runtime_session_id) {
+      queueChildSessionAutoRun(bound.id);
   }
 
   return bound;
 }
-
 export function bindChildRuntimeFromTool(
   parentSessionId: string,
   params: BindChildRuntimeParams,
@@ -1229,11 +1237,13 @@ export function bindChildRuntimeFromTool(
     ? params.toolId.trim()
     : null;
   if (!sourceToolId) {
+    console.log("[DEBUG][orchestrator] SKIP: no sourceToolId for toolName=" + "bindChildRuntimeFromTool");
     return null;
   }
 
   const materializedChild = findMaterializedChildSessionLookup(parentSessionId, sourceToolId);
   if (!materializedChild) {
+    console.log('[DEBUG][orchestrator] bindChildRuntime: NO materialized child found for sourceToolId=%s', sourceToolId);
     return null;
   }
 
@@ -1246,19 +1256,20 @@ export function bindChildRuntimeFromTool(
 
   const child = materializedChild.child;
 
-  if (child.external_session_id === runtimeSessionId) {
+  if (child.runtime_session_id === runtimeSessionId) {
     return child;
   }
 
   updateSessionStatus(child.id, {
-    external_session_id: runtimeSessionId,
+    runtime_session_id: runtimeSessionId,
     run_status: 'running',
     lifecycle_status: 'active',
   });
+  console.log('[DEBUG][orchestrator] bindChildRuntime: BOUND child.id=%s runtime_session_id=%s', child.id, runtimeSessionId);
 
   const db = getDb();
   insertEvent(db, child.id, null, 'status_changed', {
-    external_session_id: runtimeSessionId,
+    runtime_session_id: runtimeSessionId,
     bound_from_parent_tool: true,
     parent_session_id: parentSessionId,
     source_tool_id: sourceToolId,

@@ -25,7 +25,7 @@ export interface ProjectSession {
    * Backend compatibility mirror for orchestrator payloads. Use `id` for the
    * main provider/runtime identity in frontend code.
    */
-  external_session_id?: string | null;
+  runtime_session_id?: string | null;
   title?: string;
   summary?: string;
   name?: string;
@@ -126,7 +126,7 @@ export interface OrchestratorSession {
   interaction_mode: InteractionMode;
   lifecycle_status: LifecycleStatus;
   run_status: RunStatus;
-  external_session_id: string | null;
+  runtime_session_id: string | null;
   system_prompt: string;
   role_prompt: string;
   project_knowledge_snapshot: string;

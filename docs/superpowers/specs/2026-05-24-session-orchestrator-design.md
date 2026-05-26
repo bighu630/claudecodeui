@@ -1,8 +1,8 @@
 # Session Orchestrator — V1 设计规格
 
-> 基于 CloudCLI 二次开发，引入多角色 Session 编排能力。Provider 无关，支持 Claude / Cursor / Codex / Gemini 全部底层 AI。
+> 基于 CodeAgent UI 二次开发，引入多角色 Session 编排能力。Provider 无关，支持 Claude / Cursor / Codex / Gemini 全部底层 AI。
 
-**目标：** 在 CloudCLI 现有 UI 骨架上，加入 session 角色体系、层级树、状态机、自动派生和受控对话能力。
+**目标：** 在 CodeAgent UI 现有 UI 骨架上，加入 session 角色体系、层级树、状态机、自动派生和受控对话能力。
 
 **技术栈：** React + Express + SQLite + WebSocket + 多 Provider SDK/CLI
 
@@ -12,7 +12,7 @@
 
 ## 一、系统定位
 
-本改造将 CloudCLI 从一个"多 provider 通用 AI chat 界面"升级为**项目级多 Session 编排工作台**。
+本改造将 CodeAgent UI 从一个"多 provider 通用 AI chat 界面"升级为**项目级多 Session 编排工作台**。
 
 | 新增能力 | 说明 |
 |---------|------|

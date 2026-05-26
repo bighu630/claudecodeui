@@ -178,7 +178,7 @@ CREATE TABLE IF NOT EXISTS orchestrator_sessions (
     interaction_mode TEXT NOT NULL DEFAULT 'conversational' CHECK(interaction_mode IN ('conversational', 'managed')),
     lifecycle_status TEXT NOT NULL DEFAULT 'active' CHECK(lifecycle_status IN ('active', 'completed', 'failed', 'archived')),
     run_status TEXT NOT NULL DEFAULT 'idle' CHECK(run_status IN ('idle', 'queued', 'running', 'waiting_input', 'blocked')),
-    external_session_id TEXT,
+    runtime_session_id TEXT,
     system_prompt TEXT NOT NULL DEFAULT '',
     role_prompt TEXT NOT NULL DEFAULT '',
     project_knowledge_snapshot TEXT DEFAULT '',

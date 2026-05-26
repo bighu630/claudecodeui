@@ -1120,7 +1120,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
           } else {
             prBody += `Agent task: ${message}`;
           }
-          prBody += '\n\n---\n*This pull request was automatically created by CloudCLI.ai Agent.*';
+          prBody += '\n\n---\n*This pull request was automatically created by CodeAgent UI.*';
 
           console.log(`📝 PR Title: ${prTitle}`);
 

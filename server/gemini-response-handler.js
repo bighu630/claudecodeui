@@ -64,6 +64,7 @@ class GeminiResponseHandler {
     const normalized = sessionsService.normalizeMessage('gemini', event, sid);
     for (const msg of normalized) {
       if (this.orchestratorSessionId && msg.kind === 'tool_use') {
+          console.log("[DEBUG][gemini-handler] -> materializeAndBindChildSessionFromTool toolName=" + msg.toolName + " toolId=" + msg.toolId);
         materializeAndBindChildSessionFromTool(this.orchestratorSessionId, {
           toolName: msg.toolName,
           toolInput: msg.toolInput,

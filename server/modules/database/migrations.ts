@@ -570,6 +570,21 @@ export const runMigrations = (db: Database) => {
       'TEXT',
     );
 
+    // V1.2: Rename external_session_id → runtime_session_id
+    const orchColNamesAfterV1p2 = getTableInfo(db, 'orchestrator_sessions').map((col) => col.name);
+    if (orchColNamesAfterV1p2.includes('external_session_id')) {
+      console.log('Running migration: Renaming orchestrator_sessions.external_session_id → runtime_session_id');
+      db.exec('ALTER TABLE orchestrator_sessions RENAME COLUMN external_session_id TO runtime_session_id');
+    }
+    addColumnToTableIfNotExists(
+      db,
+      'orchestrator_sessions',
+      getTableInfo(db, 'orchestrator_sessions').map((column) => column.name),
+      'runtime_session_id',
+      'TEXT',
+    );
+    db.exec('CREATE INDEX IF NOT EXISTS idx_orch_runtime_session ON orchestrator_sessions(runtime_session_id)');
+
     console.log('Database migrations completed successfully');
   } catch (error: any) {
     console.error('Error running migrations:', error.message);

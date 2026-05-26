@@ -365,7 +365,7 @@ function ChatInterface({
           selectedProject={selectedProject}
         />
 
-        {(selectedSession as any)?.interaction_mode !== 'managed' ? (
+        <div className={(selectedSession as any)?.interaction_mode === 'managed' ? 'pointer-events-none select-none opacity-40' : ''}>
           <ChatComposer
           pendingPermissionRequests={pendingPermissionRequests}
           handlePermissionDecision={handlePermissionDecision}
@@ -433,11 +433,7 @@ function ChatInterface({
           isTextareaExpanded={isTextareaExpanded}
           sendByCtrlEnter={sendByCtrlEnter}
         />
-        ) : (
-          <div className="flex items-center justify-center p-4 text-sm text-muted-foreground border-t">
-            此 session 不接受手动输入（worker 模式）
-          </div>
-        )}
+        </div>
       </div>
 
       <QuickSettingsPanel />

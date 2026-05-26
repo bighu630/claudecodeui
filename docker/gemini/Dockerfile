@@ -1,11 +1,11 @@
 FROM docker/sandbox-templates:gemini
 
 USER root
-COPY shared/install-cloudcli.sh /tmp/install-cloudcli.sh
-RUN chmod +x /tmp/install-cloudcli.sh && /tmp/install-cloudcli.sh
+COPY shared/install-codeagent.sh /tmp/install-codeagent.sh
+RUN chmod +x /tmp/install-codeagent.sh && /tmp/install-codeagent.sh
 
 USER agent
-RUN npm install -g @cloudcli-ai/cloudcli && cloudcli --version
+RUN npm install -g @codeagent-ui/codeagent && codeagent --version
 
-COPY --chown=agent:agent shared/start-cloudcli.sh /home/agent/.cloudcli-start.sh
-RUN echo '. ~/.cloudcli-start.sh' >> /home/agent/.bashrc
+COPY --chown=agent:agent shared/start-codeagent.sh /home/agent/.codeagent-start.sh
+RUN echo '. ~/.codeagent-start.sh' >> /home/agent/.bashrc

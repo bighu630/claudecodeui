@@ -2,7 +2,7 @@
 
 > **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development 或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
 
-**目标：** 在 CloudCLI 现有 UI 骨架上加入多角色 session 编排能力——层级树、4 种角色、状态机、自动派生、受控对话、provider 无关的 prompt 注入。
+**目标：** 在 CodeAgent UI 现有 UI 骨架上加入多角色 session 编排能力——层级树、4 种角色、状态机、自动派生、受控对话、provider 无关的 prompt 注入。
 
 **架构：** 保留现有 React + Express + SQLite + WebSocket 架构。新增 orchestrator 模块管理 session 生命周期，前端侧栏改 session 平铺列表为层级树，主内容区根据 `interaction_mode` 控制对话权限。
 

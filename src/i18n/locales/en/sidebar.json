@@ -20,7 +20,7 @@
     "runClaudeCli": "Run Claude CLI in a project directory to get started"
   },
   "app": {
-    "title": "CloudCLI",
+    "title": "CodeAgent",
     "subtitle": "AI coding assistant interface"
   },
   "sessions": {
@@ -66,7 +66,6 @@
     "save": "Save",
     "delete": "Delete",
     "rename": "Rename",
-    "joinCommunity": "Join Community",
     "reportIssue": "Report Issue",
     "starOnGithub": "Star on GitHub"
   },

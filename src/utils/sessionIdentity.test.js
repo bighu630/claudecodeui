@@ -20,7 +20,7 @@ const makeOrchestratorSession = (overrides = {}) => ({
   interaction_mode: 'managed',
   lifecycle_status: 'active',
   run_status: 'idle',
-  external_session_id: 'runtime_456',
+  runtime_session_id: 'runtime_456',
   system_prompt: '',
   role_prompt: '',
   project_knowledge_snapshot: '',
@@ -36,12 +36,12 @@ const makeOrchestratorSession = (overrides = {}) => ({
   ...overrides,
 });
 
-test('normalizeOrchestratorSession promotes provider runtime id to ProjectSession.id', () => {
+test('normalizeOrchestratorSession uses runtime_session_id as ProjectSession.id when available', () => {
   const normalized = normalizeOrchestratorSession(makeOrchestratorSession(), 'project_1');
 
-  assert.equal(normalized.id, 'runtime_456');
+  assert.equal(normalized.id, 'runtime_456');  // runtime_session_id takes priority
   assert.equal(normalized.orchestratorSessionId, 'orch_123');
-  assert.equal(normalized.external_session_id, 'runtime_456');
+  assert.equal(normalized.runtime_session_id, 'runtime_456');
   assert.equal(getSessionRuntimeId(normalized), 'runtime_456');
   assert.equal(getSessionRouteId(normalized), 'runtime_456');
   assert.equal(getSessionOrchestratorId(normalized), 'orch_123');
@@ -54,7 +54,7 @@ test('uninitialized orchestrator sessions keep auxiliary orchestrator identity o
       id: 'orch_pending',
       provider: null,
       model: null,
-      external_session_id: null,
+      runtime_session_id: null,
     }),
     'project_1',
   );

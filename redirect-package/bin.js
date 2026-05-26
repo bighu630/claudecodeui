@@ -1,2 +1,2 @@
 #!/usr/bin/env node
-import('@cloudcli-ai/cloudcli/dist-server/server/cli.js');
+import('@codeagent-ui/codeagent/dist-server/server/cli.js');

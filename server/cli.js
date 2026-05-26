@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * CloudCLI CLI
+ * CodeAgent CLI
  *
- * Provides command-line utilities for managing CloudCLI
+ * Provides command-line utilities for managing CodeAgent
  *
  * Commands:
  *   (no args)     - Start the server (default)
@@ -54,7 +54,7 @@ const c = {
 // Load package.json for version info
 const packageJsonPath = path.join(APP_ROOT, 'package.json');
 const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
-// Match the runtime fallback in load-env.js so "cloudcli status" reports the same default
+// Match the runtime fallback in load-env.js so "codeagent status" reports the same default
 // database location that the backend will actually use when no DATABASE_PATH is configured.
 const DEFAULT_DATABASE_PATH = path.join(os.homedir(), '.ai_agent_orchestrator', 'auth.db');
 
@@ -90,7 +90,7 @@ function getInstallDir() {
 
 // Show status command
 function showStatus() {
-    console.log(`\n${c.bright('CloudCLI UI - Status')}\n`);
+    console.log(`\n${c.bright('CodeAgent UI - Status')}\n`);
     console.log(c.dim('═'.repeat(60)));
 
     // Version info
@@ -137,9 +137,9 @@ function showStatus() {
 
     console.log('\n' + c.dim('═'.repeat(60)));
     console.log(`\n${c.tip('[TIP]')} Hints:`);
-    console.log(`      ${c.dim('>')} Use ${c.bright('cloudcli --port 8080')} to run on a custom port`);
-    console.log(`      ${c.dim('>')} Use ${c.bright('cloudcli --database-path /path/to/db')} for custom database`);
-    console.log(`      ${c.dim('>')} Run ${c.bright('cloudcli help')} for all options`);
+    console.log(`      ${c.dim('>')} Use ${c.bright('codeagent --port 8080')} to run on a custom port`);
+    console.log(`      ${c.dim('>')} Use ${c.bright('codeagent --database-path /path/to/db')} for custom database`);
+    console.log(`      ${c.dim('>')} Run ${c.bright('codeagent help')} for all options`);
     console.log(`      ${c.dim('>')} Access the UI at http://localhost:${process.env.SERVER_PORT || process.env.PORT || '3001'}\n`);
 }
 
@@ -147,15 +147,14 @@ function showStatus() {
 function showHelp() {
     console.log(`
 ╔═══════════════════════════════════════════════════════════════╗
-║              CloudCLI - Command Line Tool               ║
+║              CodeAgent - AI Coding Agent Interface               ║
 ╚═══════════════════════════════════════════════════════════════╝
 
 Usage:
-  claude-code-ui [command] [options]
-  cloudcli [command] [options]
+  codeagent [command] [options]
 
 Commands:
-  start          Start the CloudCLI server (default)
+  start          Start the CodeAgent server (default)
   sandbox        Manage Docker sandbox environments
   status         Show configuration and data locations
   update         Update to the latest version
@@ -169,10 +168,10 @@ Options:
   -v, --version               Show version information
 
 Examples:
-  $ cloudcli                        # Start with defaults
-  $ cloudcli --port 8080            # Start on port 8080
-  $ cloudcli sandbox ~/my-project   # Run in a Docker sandbox
-  $ cloudcli status                 # Show configuration
+  $ codeagent                       # Start with defaults
+  $ codeagent --port 8080           # Start on port 8080
+  $ codeagent sandbox ~/my-project  # Run in a Docker sandbox
+  $ codeagent status                # Show configuration
 
 Environment Variables:
   SERVER_PORT         Set server port (default: 3001)
@@ -182,10 +181,10 @@ Environment Variables:
   CONTEXT_WINDOW      Set context window size (default: 160000)
 
 Documentation:
-  ${packageJson.homepage || 'https://github.com/siteboon/claudecodeui'}
+  ${packageJson.homepage || 'https://github.com/bighu630/claudecodeui'}
 
 Report Issues:
-  ${packageJson.bugs?.url || 'https://github.com/siteboon/claudecodeui/issues'}
+  ${packageJson.bugs?.url || 'https://github.com/bighu630/claudecodeui/issues'}
 `);
 }
 
@@ -209,12 +208,12 @@ function isNewerVersion(v1, v2) {
 async function checkForUpdates(silent = false) {
     try {
         const { execSync } = await import('child_process');
-        const latestVersion = execSync('npm show @cloudcli-ai/cloudcli version', { encoding: 'utf8' }).trim();
+        const latestVersion = execSync('npm show @codeagent-ui/codeagent version', { encoding: 'utf8' }).trim();
         const currentVersion = packageJson.version;
 
         if (isNewerVersion(latestVersion, currentVersion)) {
             console.log(`\n${c.warn('[UPDATE]')} New version available: ${c.bright(latestVersion)} (current: ${currentVersion})`);
-            console.log(`         Run ${c.bright('cloudcli update')} to update\n`);
+            console.log(`         Run ${c.bright('codeagent update')} to update\n`);
             return { hasUpdate: true, latestVersion, currentVersion };
         } else if (!silent) {
             console.log(`${c.ok('[OK]')} You are on the latest version (${currentVersion})`);
@@ -242,20 +241,22 @@ async function updatePackage() {
         }
 
         console.log(`${c.info('[INFO]')} Updating from ${currentVersion} to ${latestVersion}...`);
-        execSync('npm update -g @cloudcli-ai/cloudcli', { stdio: 'inherit' });
-        console.log(`${c.ok('[OK]')} Update complete! Restart cloudcli to use the new version.`);
+        execSync('npm update -g @codeagent-ui/codeagent', { stdio: 'inherit' });
+        console.log(`${c.ok('[OK]')} Update complete! Restart codeagent to use the new version.`);
     } catch (e) {
         console.error(`${c.error('[ERROR]')} Update failed: ${e.message}`);
-        console.log(`${c.tip('[TIP]')} Try running manually: npm update -g @cloudcli-ai/cloudcli`);
+        console.log(`${c.tip('[TIP]')} Try running manually: npm update -g @codeagent-ui/codeagent`);
     }
 }
 
 // ── Sandbox command ─────────────────────────────────────────
 
 const SANDBOX_TEMPLATES = {
-    claude: 'docker.io/cloudcliai/sandbox:claude-code',
-    codex: 'docker.io/cloudcliai/sandbox:codex',
-    gemini: 'docker.io/cloudcliai/sandbox:gemini',
+    // Override via env vars to use your own Docker Hub images.
+    // Defaults point to the fork maintainer's published sandbox images.
+    claude: process.env.SBX_TEMPLATE_CLAUDE || 'docker.io/bighu630/sandbox:claude-code',
+    codex: process.env.SBX_TEMPLATE_CODEX  || 'docker.io/bighu630/sandbox:codex',
+    gemini: process.env.SBX_TEMPLATE_GEMINI || 'docker.io/bighu630/sandbox:gemini',
 };
 
 const SANDBOX_SECRETS = {
@@ -321,11 +322,11 @@ function parseSandboxArgs(args) {
 
 function showSandboxHelp() {
     console.log(`
-${c.bright('CloudCLI Sandbox')} — Run CloudCLI inside Docker Sandboxes
+${c.bright('CodeAgent Sandbox')} — Run CodeAgent inside Docker Sandboxes
 
 Usage:
-  cloudcli sandbox <workspace>            Create and start a sandbox
-  cloudcli sandbox <subcommand> [name]    Manage sandboxes
+  codeagent sandbox <workspace>            Create and start a sandbox
+  codeagent sandbox <subcommand> [name]    Manage sandboxes
 
 Subcommands:
   ${c.bright('(default)')}    Create a sandbox and start the web UI
@@ -333,7 +334,7 @@ Subcommands:
   ${c.bright('start')}        Restart a stopped sandbox and re-launch the web UI
   ${c.bright('stop')}         Stop a sandbox (preserves state)
   ${c.bright('rm')}           Remove a sandbox
-  ${c.bright('logs')}         Show CloudCLI server logs
+  ${c.bright('logs')}         Show CodeAgent server logs
   ${c.bright('help')}         Show this help
 
 Options:
@@ -344,13 +345,13 @@ Options:
       --port <port>         Host port for the web UI (default: 3001)
 
 Examples:
-  $ cloudcli sandbox ~/my-project
-  $ cloudcli sandbox ~/my-project --agent codex --port 8080
-  $ cloudcli sandbox ~/my-project --env SERVER_PORT=8080 --env HOST=0.0.0.0
-  $ cloudcli sandbox ls
-  $ cloudcli sandbox stop my-project
-  $ cloudcli sandbox start my-project
-  $ cloudcli sandbox rm my-project
+  $ codeagent sandbox ~/my-project
+  $ codeagent sandbox ~/my-project --agent codex --port 8080
+  $ codeagent sandbox ~/my-project --env SERVER_PORT=8080 --env HOST=0.0.0.0
+  $ codeagent sandbox ls
+  $ codeagent sandbox stop my-project
+  $ codeagent sandbox start my-project
+  $ codeagent sandbox rm my-project
 
 Prerequisites:
   1. Install sbx CLI: https://docs.docker.com/ai/sandboxes/get-started/
@@ -362,10 +363,12 @@ Prerequisites:
 
 Advanced usage:
   For branch mode, multiple workspaces, memory limits, network policies,
-  or passing prompts to the agent, use sbx directly with the template:
+  or passing prompts to the agent, use sbx directly with the template.
+  Set SBX_TEMPLATE_CLAUDE / SBX_TEMPLATE_CODEX / SBX_TEMPLATE_GEMINI to
+  override default sandbox images.
 
-    sbx run --template docker.io/cloudcliai/sandbox:claude-code claude ~/my-project --branch my-feature
-    sbx run --template docker.io/cloudcliai/sandbox:claude-code claude ~/project ~/libs:ro --memory 8g
+    sbx run --template docker.io/bighu630/sandbox:claude-code claude ~/my-project --branch my-feature
+    sbx run --template docker.io/bighu630/sandbox:claude-code claude ~/project ~/libs:ro --memory 8g
 
   Full Docker Sandboxes docs: https://docs.docker.com/ai/sandboxes/usage/
 `);
@@ -416,7 +419,7 @@ async function sandboxCommand(args) {
 
         case 'stop':
             if (!opts.name) {
-                console.error(`\n${c.error('❌')} Sandbox name required: cloudcli sandbox stop <name>\n`);
+                console.error(`\n${c.error('❌')} Sandbox name required: codeagent sandbox stop <name>\n`);
                 process.exit(1);
             }
             sbx(['stop', opts.name], { inherit: true });
@@ -424,7 +427,7 @@ async function sandboxCommand(args) {
 
         case 'rm':
             if (!opts.name) {
-                console.error(`\n${c.error('❌')} Sandbox name required: cloudcli sandbox rm <name>\n`);
+                console.error(`\n${c.error('❌')} Sandbox name required: codeagent sandbox rm <name>\n`);
                 process.exit(1);
             }
             sbx(['rm', opts.name], { inherit: true });
@@ -432,11 +435,11 @@ async function sandboxCommand(args) {
 
         case 'logs':
             if (!opts.name) {
-                console.error(`\n${c.error('❌')} Sandbox name required: cloudcli sandbox logs <name>\n`);
+                console.error(`\n${c.error('❌')} Sandbox name required: codeagent sandbox logs <name>\n`);
                 process.exit(1);
             }
             try {
-                sbx(['exec', opts.name, 'bash', '-c', 'cat /tmp/cloudcli-ui.log'], { inherit: true });
+                sbx(['exec', opts.name, 'bash', '-c', 'cat /tmp/codeagent-ui.log'], { inherit: true });
             } catch (e) {
                 console.error(`\n${c.error('❌')} Could not read logs: ${e.message || 'Is the sandbox running?'}\n`);
             }
@@ -444,7 +447,7 @@ async function sandboxCommand(args) {
 
         case 'start': {
             if (!opts.name) {
-                console.error(`\n${c.error('❌')} Sandbox name required: cloudcli sandbox start <name>\n`);
+                console.error(`\n${c.error('❌')} Sandbox name required: codeagent sandbox start <name>\n`);
                 process.exit(1);
             }
             console.log(`\n${c.info('▶')} Starting sandbox ${c.bright(opts.name)}...`);
@@ -455,8 +458,8 @@ async function sandboxCommand(args) {
             restartRun.unref();
             await new Promise(resolve => setTimeout(resolve, 5000));
 
-            console.log(`${c.info('▶')} Launching CloudCLI web server...`);
-            sbx(['exec', opts.name, 'bash', '-c', 'cloudcli start --port 3001 &']);
+            console.log(`${c.info('▶')} Launching CodeAgent web server...`);
+            sbx(['exec', opts.name, 'bash', '-c', 'codeagent start --port 3001 &']);
 
             console.log(`${c.info('▶')} Forwarding port ${opts.port} → 3001...`);
             try {
@@ -478,15 +481,15 @@ async function sandboxCommand(args) {
                 }
             }
 
-            console.log(`\n${c.ok('✔')} ${c.bright('CloudCLI is ready!')}`);
+            console.log(`\n${c.ok('✔')} ${c.bright('CodeAgent is ready!')}`);
             console.log(`  ${c.info('→')} ${c.bright(`http://localhost:${opts.port}`)}\n`);
             break;
         }
 
         case 'create': {
             if (!opts.workspace) {
-                console.error(`\n${c.error('❌')} Workspace path required: cloudcli sandbox <path>\n`);
-                console.log(`   Example: ${c.bright('cloudcli sandbox ~/my-project')}\n`);
+                console.error(`\n${c.error('❌')} Workspace path required: codeagent sandbox <path>\n`);
+                console.log(`   Example: ${c.bright('codeagent sandbox ~/my-project')}\n`);
                 process.exit(1);
             }
 
@@ -511,7 +514,7 @@ async function sandboxCommand(args) {
                 }
             } catch { /* sbx secret ls not available, skip check */ }
 
-            console.log(`\n${c.bright('CloudCLI Sandbox')}`);
+            console.log(`\n${c.bright('CodeAgent Sandbox')}`);
             console.log(c.dim('─'.repeat(50)));
             console.log(`  Agent:     ${c.info(opts.agent)} ${c.dim(`(${secret} credentials)`)}`);
             console.log(`  Workspace: ${c.dim(workspace)}`);
@@ -553,9 +556,9 @@ async function sandboxCommand(args) {
                 }
             }
 
-            // Step 3: Start CloudCLI inside the sandbox
-            console.log(`${c.info('▶')} Launching CloudCLI web server...`);
-            sbx(['exec', opts.name, 'bash', '-c', 'cloudcli start --port 3001 &']);
+            // Step 3: Start CodeAgent inside the sandbox
+            console.log(`${c.info('▶')} Launching CodeAgent web server...`);
+            sbx(['exec', opts.name, 'bash', '-c', 'codeagent start --port 3001 &']);
 
             // Step 4: Forward port
             console.log(`${c.info('▶')} Forwarding port ${opts.port} → 3001...`);
@@ -579,14 +582,14 @@ async function sandboxCommand(args) {
             }
 
             // Done
-            console.log(`\n${c.ok('✔')} ${c.bright('CloudCLI is ready!')}`);
+            console.log(`\n${c.ok('✔')} ${c.bright('CodeAgent is ready!')}`);
             console.log(`  ${c.info('→')} Open ${c.bright(`http://localhost:${opts.port}`)}`);
             console.log(`\n${c.dim('  Manage with:')}`);
             console.log(`  ${c.dim('$')} sbx ls`);
             console.log(`  ${c.dim('$')} sbx stop ${opts.name}`);
             console.log(`  ${c.dim('$')} sbx start ${opts.name}`);
             console.log(`  ${c.dim('$')} sbx rm ${opts.name}`);
-            console.log(`\n${c.dim('  Or install globally:')} npm install -g @cloudcli-ai/cloudcli\n`);
+            console.log(`\n${c.dim('  Or install globally:')} npm install -g @codeagent-ui/codeagent\n`);
             break;
         }
 
@@ -678,7 +681,7 @@ async function main() {
             break;
         default:
             console.error(`\n❌ Unknown command: ${command}`);
-            console.log('   Run "cloudcli help" for usage information.\n');
+            console.log('   Run "codeagent help" for usage information.\n');
             process.exit(1);
     }
 }

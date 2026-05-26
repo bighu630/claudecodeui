@@ -1,11 +1,11 @@
 {
-  "name": "@cloudcli-ai/cloudcli",
+  "name": "@codeagent-ui/codeagent",
   "version": "1.32.0",
-  "description": "A web-based UI for Claude Code CLI",
+  "description": "A web-based UI for AI coding agents",
   "type": "module",
   "main": "dist-server/server/index.js",
   "bin": {
-    "cloudcli": "dist-server/server/cli.js"
+    "codeagent": "dist-server/server/cli.js"
   },
   "files": [
     "server/",
@@ -13,15 +13,16 @@
     "dist/",
     "dist-server/",
     "scripts/",
-    "README.md"
+    "README.md",
+    "codeagent"
   ],
-  "homepage": "https://cloudcli.ai",
+  "homepage": "https://github.com/bighu630/claudecodeui",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/siteboon/claudecodeui.git"
+    "url": "git+https://github.com/bighu630/claudecodeui.git"
   },
   "bugs": {
-    "url": "https://github.com/siteboon/claudecodeui/issues"
+    "url": "https://github.com/bighu630/claudecodeui/issues"
   },
   "scripts": {
     "dev": "concurrently --kill-others \"npm run server:dev\" \"npm run client\"",
@@ -48,7 +49,6 @@
     "claude code",
     "claude-code",
     "claude-code-ui",
-    "cloudcli",
     "codex",
     "gemini",
     "gemini-cli",
@@ -62,7 +62,7 @@
     "ui",
     "mobile IDE"
   ],
-  "author": "CloudCLI UI Contributors",
+  "author": "CodeAgent UI Contributors",
   "license": "AGPL-3.0-or-later",
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.116",
@@ -76,7 +76,7 @@
     "@codemirror/theme-one-dark": "^6.1.2",
     "@iarna/toml": "^2.2.5",
     "@octokit/rest": "^22.0.0",
-    "@openai/codex-sdk": "^0.125.0",
+    "@openai/codex-sdk": "0.128.0",
     "@replit/codemirror-minimap": "^0.5.2",
     "@tailwindcss/typography": "^0.5.16",
     "@uiw/react-codemirror": "^4.23.13",

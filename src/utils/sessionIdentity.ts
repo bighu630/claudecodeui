@@ -38,8 +38,8 @@ export const getSessionRuntimeId = (
     return legacyRuntimeId;
   }
 
-  if (typeof session.external_session_id === 'string' && session.external_session_id.trim()) {
-    return session.external_session_id;
+  if (typeof session.runtime_session_id === 'string' && session.runtime_session_id.trim()) {
+    return session.runtime_session_id;
   }
 
   if (isOrchestratorSession(session)) {
@@ -64,13 +64,12 @@ export const normalizeOrchestratorSession = (
   session: OrchestratorSession | OrchestratorLikeSession,
   projectId: string,
 ): ProjectSession => {
-  const runtimeSessionId = typeof session.external_session_id === 'string' && session.external_session_id.trim()
-    ? session.external_session_id
-    : null;
-
+  // Use runtime_session_id as the primary ProjectSession.id when available.
+  // The orchestrator's internal id is preserved in orchestratorSessionId.
+  const primaryId = session.runtime_session_id || session.id;
   return {
     ...session,
-    id: runtimeSessionId || session.id,
+    id: primaryId,
     orchestratorSessionId: session.id,
     __projectId: projectId,
     __provider: session.provider ?? undefined,

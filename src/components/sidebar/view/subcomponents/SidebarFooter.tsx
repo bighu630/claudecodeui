@@ -3,10 +3,8 @@ import type { TFunction } from 'i18next';
 import { IS_PLATFORM } from '../../../../constants/config';
 import type { ReleaseInfo } from '../../../../types/sharedTypes';
 
-const GITHUB_ISSUES_URL = 'https://github.com/siteboon/claudecodeui/issues/new';
-const GITHUB_REPO_URL = 'https://github.com/siteboon/claudecodeui';
-
-const DISCORD_INVITE_URL = 'https://discord.gg/buxwujPNRE';
+const GITHUB_ISSUES_URL = 'https://github.com/bighu630/claudecodeui/issues/new';
+const GITHUB_REPO_URL = 'https://github.com/bighu630/claudecodeui';
 
 function DiscordIcon({ className }: { className?: string }) {
   return (
@@ -101,19 +99,6 @@ export default function SidebarFooter({
         </a>
       </div>
 
-      {/* Desktop Discord */}
-      <div className="hidden px-2 md:block">
-        <a
-          href={DISCORD_INVITE_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
-        >
-          <DiscordIcon className="h-3.5 w-3.5" />
-          <span className="text-sm">{t('actions.joinCommunity')}</span>
-        </a>
-      </div>
-
       {/* Desktop settings */}
       <div className="hidden px-2 py-1.5 md:block">
         <button
@@ -134,7 +119,7 @@ export default function SidebarFooter({
             rel="noopener noreferrer"
             className="text-[10px] text-muted-foreground/40 transition-colors hover:text-muted-foreground"
           >
-            CloudCLI v{currentVersion} – {t('branding.openSource')}
+            CodeAgent UI v{currentVersion} – {t('branding.openSource')}
           </a>
         </div>
       )}
@@ -151,21 +136,6 @@ export default function SidebarFooter({
             <Bug className="w-4.5 h-4.5 text-muted-foreground" />
           </div>
           <span className="text-base font-medium text-foreground">{t('actions.reportIssue')}</span>
-        </a>
-      </div>
-
-      {/* Mobile Discord */}
-      <div className="px-3 pt-2 md:hidden">
-        <a
-          href={DISCORD_INVITE_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex h-12 w-full items-center gap-3.5 rounded-xl bg-muted/40 px-4 transition-all hover:bg-muted/60 active:scale-[0.98]"
-        >
-          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-background/80">
-            <DiscordIcon className="w-4.5 h-4.5 text-muted-foreground" />
-          </div>
-          <span className="text-base font-medium text-foreground">{t('actions.joinCommunity')}</span>
         </a>
       </div>
 

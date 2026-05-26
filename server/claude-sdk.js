@@ -685,12 +685,19 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
       // Use adapter to normalize SDK events into NormalizedMessage[]
       const normalized = sessionsService.normalizeMessage('claude', transformedMessage, sid);
+      if (options.orchestratorSessionId && normalized.length > 0) {
+        const toolUseMsgs = normalized.filter(m => m.kind === 'tool_use');
+        if (toolUseMsgs.length > 0) {
+          console.log("[DEBUG][claude-handler] normalizedMsgs=" + normalized.length + " toolUseMsgs=" + toolUseMsgs.length);
+        }
+      }
       for (const msg of normalized) {
         // Preserve parentToolUseId from SDK wrapper for subagent tool grouping
         if (transformedMessage.parentToolUseId && !msg.parentToolUseId) {
           msg.parentToolUseId = transformedMessage.parentToolUseId;
         }
         if (options.orchestratorSessionId && msg.kind === 'tool_use') {
+          console.log("[DEBUG][claude-handler] -> materializeAndBindChildSessionFromTool toolName=" + msg.toolName + " toolId=" + msg.toolId);
           materializeAndBindChildSessionFromTool(options.orchestratorSessionId, {
             toolName: msg.toolName,
             toolInput: msg.toolInput,

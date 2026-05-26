@@ -1,26 +1,25 @@
 {
-  "name": "@siteboon/claude-code-ui",
+  "name": "@codeagent-ui/codeagent-redirect",
   "version": "2.0.0",
-  "description": "This package has moved to @cloudcli-ai/cloudcli",
+  "description": "This package redirects to @codeagent-ui/codeagent",
   "type": "module",
   "main": "index.js",
   "bin": {
-    "claude-code-ui": "./bin.js",
-    "cloudcli": "./bin.js"
+    "codeagent": "./bin.js"
   },
-  "homepage": "https://cloudcli.ai",
+  "homepage": "https://github.com/bighu630/claudecodeui",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/siteboon/claudecodeui.git"
+    "url": "git+https://github.com/bighu630/claudecodeui.git"
   },
   "bugs": {
-    "url": "https://github.com/siteboon/claudecodeui/issues"
+    "url": "https://github.com/bighu630/claudecodeui/issues"
   },
   "keywords": [
     "claude code",
     "claude-code",
     "claude-code-ui",
-    "cloudcli",
+    "codeagent",
     "codex",
     "gemini",
     "gemini-cli",
@@ -34,10 +33,10 @@
     "ui",
     "mobile IDE"
   ],
-  "author": "CloudCLI UI Contributors",
+  "author": "CodeAgent UI Contributors",
   "dependencies": {
-    "@cloudcli-ai/cloudcli": "*"
+    "@codeagent-ui/codeagent": "*"
   },
-  "deprecated": "This package has been renamed to @cloudcli-ai/cloudcli. Please install @cloudcli-ai/cloudcli instead.",
+  "deprecated": "This package has been renamed to @codeagent-ui/codeagent. Please install @codeagent-ui/codeagent instead.",
   "license": "AGPL-3.0-or-later"
 }

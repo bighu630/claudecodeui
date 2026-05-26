@@ -1,2 +1,2 @@
-export * from '@cloudcli-ai/cloudcli';
-export { default } from '@cloudcli-ai/cloudcli';
+export * from "@codeagent-ui/codeagent";
+export { default } from "@codeagent-ui/codeagent";
