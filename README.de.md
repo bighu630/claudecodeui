@@ -6,6 +6,40 @@
 <div align="right"><i><a href="./README.md">English</a> · <a href="./README.ru.md">Русский</a> · <b>Deutsch</b> · <a href="./README.ko.md">한국어</a> · <a href="./README.zh-CN.md">中文</a> · <a href="./README.ja.md">日本語</a> · <a href="./README.tr.md">Türkçe</a></i></div>
 
 ---
+## Rollenbasiertes Sitzungssystem
+
+CodeAgent UI verwendet ein rollenbasiertes Sitzungssystem zur Steuerung komplexer Agenten-Workflows. Jedes Projekt erhält bei der Erstellung zwei Stamm-Sitzungsbäume, und Sitzungen folgen einer strengen Eltern-Kind-Ableitungshierarchie.
+
+### Sitzungsbaumstruktur
+
+Jedes Projekt wird mit zwei unabhängigen Stamm-Sitzungen initialisiert:
+
+- **tech_lead** — trifft Architekturentscheidungen, führt Machbarkeitsanalysen durch und zerlegt Anforderungen. Delegiert Implementierungsaufgaben an feature_lead-Sitzungen.
+- **ops** — verwaltet Bereitstellung, Umgebungskonfiguration und Infrastruktursupport. Diese Stamm-Sitzung ist unabhängig und erstellt keine Kind-Sitzungen.
+
+Zulässige Ableitungen:
+
+- `tech_lead → feature_lead` — eine tech_lead-Sitzung kann feature_lead-Kindersitzungen erstellen
+- `feature_lead → worker` — eine feature_lead-Sitzung kann worker-Kindersitzungen erstellen
+- `worker → ✗` — worker sind nur für die Ausführung da und können keine weiteren Sitzungen erzeugen
+- `ops → ✗` — ops-Sitzungen arbeiten unabhängig
+
+### Rollenverantwortlichkeiten
+
+| Rolle | Verantwortung |
+|---|---|
+| **tech_lead** | Architekturentscheidungen, Machbarkeitsbewertung, Anforderungsanalyse. Übergibt Aufgaben an feature_lead. |
+| **feature_lead** | Planung auf Code-Ebene, Implementierungszerlegung, Koordination von worker. |
+| **worker** | Befolgt strikt eine Aufgabenbeschreibung. Einzelverantwortung. |
+| **ops** | Bereitstellung, Umgebung, Infrastruktursupport. |
+
+### Leerstart-Strategie
+
+Kind-Sitzungen starten in einem leeren Zustand und erhalten nur den minimal notwendigen Übergabekontext (Ziel, Einschränkungen, Aufgabenbeschreibung). Der Sitzungsverlauf wird **nicht** von der Eltern-Sitzung geerbt. Dies verhindert Rollenüberlappung – ein worker handelt nur im Rahmen seiner zugewiesenen Aufgabe, nicht auf Basis des gesamten Gesprächs, das sie hervorgebracht hat.
+
+### Trennung von Sitzung und Laufzeit
+
+Die Orchestrator-Sitzung ist eine **logische Identität** im Sitzungsbaum, während die Provider-Laufzeit (Claude-, Codex-, Cursor- oder Gemini-Sitzung) der **Ausführungsträger** ist. Dies sind unterschiedliche Konzepte: Eine Orchestrator-Sitzung kann über `external_session_id` an eine Laufzeit-Sitzung gebunden werden, aber die Baumstruktur, Rollen-Prompts und der Lebenszyklus werden unabhängig vom Laufzeit-Provider verwaltet.
 
 ## Screenshots
 
@@ -89,7 +123,6 @@ npx @codeagent-ui/codeagent@latest sandbox ~/my-project
 Unterstützt Claude Code, Codex und Gemini CLI. Weitere Details in der [Sandbox-Dokumentation](docker/).
 
 ---
-
 ## Welche Option passt zu dir?
 
 CodeAgent UI ist die Open-Source-UI-Schicht, die CodeAgent Cloud antreibt. Du kannst es auf deinem eigenen Rechner selbst hosten oder CodeAgent Cloud nutzen, das darauf aufbaut und eine vollständig verwaltete Cloud-Umgebung, Team-Funktionen und tiefere Integrationen bietet.
@@ -114,7 +147,6 @@ CodeAgent UI ist die Open-Source-UI-Schicht, die CodeAgent Cloud antreibt. Du ka
 > Beide Optionen verwenden deine eigenen KI-Abonnements (Claude, Cursor usw.) – CodeAgent stellt die Umgebung bereit, nicht die KI.
 
 ---
-
 ## Sicherheit & Tool-Konfiguration
 
 **🔒 Wichtiger Hinweis**: Alle Claude Code Tools sind **standardmäßig deaktiviert**. Dies verhindert, dass potenziell schädliche Operationen automatisch ausgeführt werden.
@@ -137,7 +169,6 @@ Um den vollen Funktionsumfang von Claude Code zu nutzen, müssen Tools manuell a
 **Empfohlene Vorgehensweise**: Mit grundlegenden Tools starten und bei Bedarf weitere hinzufügen. Die Einstellungen können jederzeit angepasst werden.
 
 ---
-
 ## Plugins
 
 CodeAgent verfügt über ein Plugin-System, mit dem benutzerdefinierte Tabs mit eigener Frontend-UI und optionalem Node.js-Backend hinzugefügt werden können. Plugins können direkt in **Einstellungen > Plugins** aus Git-Repos installiert oder selbst entwickelt werden.
@@ -196,7 +227,6 @@ Ja, bei Self-Hosted. CodeAgent UI liest aus und schreibt in dieselbe `~/.claude`
 </details>
 
 ---
-
 ## Community & Support
 
 - **[Dokumentation](https://github.com/bighu630/claudecodeui)** — Installation, Konfiguration, Funktionen und Fehlerbehebung
@@ -224,7 +254,3 @@ Dieses Projekt ist Open Source und kann unter der GPL v3-Lizenz kostenlos genutz
 
 ### Sponsoren
 ---
-
-<div align="center">
-  <strong>Mit Sorgfalt für die Claude Code-, Cursor- und Codex-Community erstellt.</strong>
-</div>

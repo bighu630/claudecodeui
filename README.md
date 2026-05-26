@@ -9,6 +9,41 @@
 
 <div align="right"><i><b>English</b> · <a href="./README.ru.md">Русский</a> · <a href="./README.de.md">Deutsch</a> · <a href="./README.ko.md">한국어</a> · <a href="./README.zh-CN.md">中文</a> · <a href="./README.ja.md">日本語</a> · <a href="./README.tr.md">Türkçe</a></i></div>
 ---
+## Role-Based Session System
+
+CodeAgent UI uses a role-based session system to manage complex agent workflows. Each project gets two root session trees at creation time, and sessions follow a strict parent-child derivation hierarchy.
+
+### Session Tree Structure
+
+Each project is bootstrapped with two independent root sessions:
+
+- **tech_lead** — handles architecture decisions, feasibility analysis, and requirements decomposition. Delegates implementation work to feature_lead sessions.
+- **ops** — manages deployment, environment configuration, and infrastructure support. This root is independent and does not create child sessions.
+
+Allowed derivations:
+
+- `tech_lead → feature_lead` — a tech_lead session can create feature_lead children
+- `feature_lead → worker` — a feature_lead session can create worker children
+- `worker → ✗` — workers are execution-only and cannot spawn further sessions
+- `ops → ✗` — ops sessions operate independently
+
+### Role Responsibilities
+
+| Role | Responsibility |
+|---|---|
+| **tech_lead** | Architecture decisions, feasibility assessment, requirements analysis. Hands off tasks to feature_lead. |
+| **feature_lead** | Code-level planning, implementation decomposition, worker coordination. |
+| **worker** | Strictly follows a task spec. Single responsibility. |
+| **ops** | Deployment, environment, infrastructure support. |
+
+### Empty Startup Strategy
+
+Child sessions start in a blank state and receive only the minimum necessary handoff context (goal, constraints, task spec). Session history is **not** inherited from the parent. This prevents role leakage—a worker acts on its assigned task, not on the full conversation that produced it.
+
+### Session vs Runtime Separation
+
+The orchestrator session is a **logical identity** in the session tree, while the provider runtime (Claude, Codex, Cursor, or Gemini session) is the **execution carrier**. These are distinct concepts: one orchestrator session may bind to one runtime session via `external_session_id`, but the tree structure, role prompts, and lifecycle are managed independently from the runtime provider.
+
 ## Screenshots
 
 <div align="center">

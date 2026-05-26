@@ -6,6 +6,40 @@
 <div align="right"><i><a href="./README.md">English</a> · <a href="./README.ru.md">Русский</a> · <a href="./README.de.md">Deutsch</a> · <a href="./README.ko.md">한국어</a> · <a href="./README.zh-CN.md">中文</a> · <a href="./README.ja.md">日本語</a> · <b>Türkçe</b></i></div>
 
 ---
+## Rol Tabanlı Oturum Sistemi
+
+CodeAgent UI, karmaşık ajan iş akışlarını yönetmek için rol tabanlı bir oturum sistemi kullanır. Her proje oluşturulurken iki kök oturum ağacı alır ve oturumlar katı bir ebeveyn-çocuk türetme hiyerarşisini takip eder.
+
+### Oturum Ağacı Yapısı
+
+Her proje iki bağımsız kök oturum ile başlatılır:
+
+- **tech_lead** — mimari kararları, fizibilite analizini ve gereksinim ayrıştırmasını yönetir. Uygulama görevlerini feature_lead oturumlarına devreder.
+- **ops** — dağıtım, ortam yapılandırması ve altyapı desteğini yönetir. Bu kök bağımsızdır ve alt oturum oluşturmaz.
+
+İzin verilen türetmeler:
+
+- `tech_lead → feature_lead` — bir tech_lead oturumu, feature_lead alt oturumları oluşturabilir
+- `feature_lead → worker` — bir feature_lead oturumu, worker alt oturumları oluşturabilir
+- `worker → ✗` — worker'lar yalnızca yürütme amaçlıdır ve daha fazla oturum oluşturamaz
+- `ops → ✗` — ops oturumları bağımsız çalışır
+
+### Rol Sorumlulukları
+
+| Rol | Sorumluluk |
+|---|---|
+| **tech_lead** | Mimari kararlar, fizibilite değerlendirmesi, gereksinim analizi. Görevleri feature_lead'e aktarır. |
+| **feature_lead** | Kod düzeyinde planlama, uygulama ayrıştırması, worker koordinasyonu. |
+| **worker** | Bir görev tanımını sıkı şekilde takip eder. Tek sorumluluk. |
+| **ops** | Dağıtım, ortam, altyapı desteği. |
+
+### Boş Başlatma Stratejisi
+
+Alt oturumlar boş bir durumda başlar ve yalnızca minimum gerekli devir bağlamını (hedef, kısıtlamalar, görev tanımı) alır. Oturum geçmişi ebeveynden **devralınmaz**. Bu, rol sızıntısını önler — bir worker yalnızca kendisine atanan görev üzerinde çalışır, onu oluşturan tüm konuşma üzerinde değil.
+
+### Oturum ve Çalışma Zamanı Ayrımı
+
+Orkestratör oturumu, oturum ağacındaki **mantıksal kimliktir**, sağlayıcı çalışma zamanı (Claude, Codex, Cursor veya Gemini oturumu) ise **yürütme taşıyıcısıdır**. Bunlar farklı kavramlardır: bir orkestratör oturumu, `external_session_id` aracılığıyla bir çalışma zamanı oturumuna bağlanabilir, ancak ağaç yapısı, rol promptları ve yaşam döngüsü, çalışma zamanı sağlayıcısından bağımsız olarak yönetilir.
 
 ## Ekran Görüntüleri
 
@@ -89,7 +123,6 @@ npx @codeagent-ui/codeagent@latest sandbox ~/my-project
 Claude Code, Codex ve Gemini CLI destekler. Kurulum ve gelişmiş seçenekler için [sandbox dokümantasyonuna](docker/) bak.
 
 ---
-
 ## Hangi seçenek sana uygun?
 
 CodeAgent UI, CodeAgent Cloud'u güçlendiren açık kaynak arayüz katmanıdır. Kendi makinende barındırabilir, izolasyon için Docker sandbox'ta çalıştırabilir veya tam yönetilen ortam için CodeAgent Cloud kullanabilirsin.
@@ -112,7 +145,6 @@ CodeAgent UI, CodeAgent Cloud'u güçlendiren açık kaynak arayüz katmanıdır
 > Tüm seçenekler kendi AI aboneliklerini (Claude, Cursor, vb.) kullanır — CodeAgent AI'ı değil, ortamı sağlar.
 
 ---
-
 ## Güvenlik ve Araç Yapılandırması
 
 **🔒 Önemli Uyarı**: Tüm Claude Code araçları **varsayılan olarak devre dışıdır**. Bu, potansiyel olarak zararlı işlemlerin otomatik çalışmasını önler.
@@ -135,7 +167,6 @@ Claude Code'un tam işlevselliğinden yararlanmak için araçları manuel olarak
 **Önerilen yaklaşım**: Temel araçlarla başla ve gerektikçe daha fazlasını ekle. Bu ayarları sonra her zaman değiştirebilirsin.
 
 ---
-
 ## Eklentiler
 
 CodeAgent, kendi frontend UI'sı ve isteğe bağlı Node.js arka ucu olan özel sekmeler eklemeni sağlayan bir eklenti sistemine sahiptir. Git depolarından eklentileri doğrudan **Ayarlar > Eklentiler**'den yükleyebilir veya kendi eklentini yazabilirsin.
@@ -195,7 +226,6 @@ Evet, kendin barındırdığında. CodeAgent UI, Claude Code'un yerel olarak kul
 </details>
 
 ---
-
 ## Topluluk ve Destek
 
 - **[Dokümantasyon](https://github.com/bighu630/claudecodeui)** — kurulum, yapılandırma, özellikler ve sorun giderme
@@ -225,7 +255,3 @@ CodeAgent UI — (https://github.com/bighu630/claudecodeui).
 
 ### Sponsorlar
 ---
-
-<div align="center">
-  <strong>Claude Code, Cursor ve Codex topluluğu için özenle yapıldı.</strong>
-</div>
