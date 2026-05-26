@@ -17,6 +17,7 @@ import type {
   Project,
   ProjectSession,
   ProjectsUpdatedMessage,
+  SessionTreeNode,
 } from '../types/app';
 
 type UseProjectsStateArgs = {
@@ -646,11 +647,46 @@ export function useProjectsState({
     };
   }, [navigate, sessionId, projects, selectedProject, selectedSession]);
 
+  const latestProjectSelectRef = useRef<string | null>(null);
   const handleProjectSelect = useCallback(
     (project: Project) => {
       setSelectedProject(project);
       setSelectedSession(null);
-      navigate('/');
+      navigate("/");
+
+      const selectedProjectId = project.projectId;
+      latestProjectSelectRef.current = selectedProjectId;
+
+      void (async () => {
+        try {
+          const response = await authenticatedFetch(`/api/orchestrator/projects/${encodeURIComponent(selectedProjectId)}/tree`);
+          if (!response.ok) return;
+          const data = await response.json() as { tree: SessionTreeNode[] };
+          if (!data.tree || data.tree.length === 0) {
+            if (latestProjectSelectRef.current !== selectedProjectId) return;
+            setSelectedProject(null);
+            return;
+          }
+
+          if (latestProjectSelectRef.current !== selectedProjectId) return;
+
+          const rootNode = data.tree.find(n => n.type === "tech_lead") || data.tree.find(n => n.type === "ops");
+          if (!rootNode) {
+            if (latestProjectSelectRef.current !== selectedProjectId) return;
+            setSelectedProject(null);
+            return;
+          }
+
+          const normalizedSession = normalizeOrchestratorSession(rootNode, project.projectId);
+          setSelectedSession(normalizedSession);
+          const routeSessionId = getSessionRouteId(normalizedSession);
+          if (routeSessionId) {
+            navigate(`/session/${routeSessionId}`);
+          }
+        } catch {
+          // User stays on new session page if tree fetch fails
+        }
+      })();
 
       if (isMobile) {
         setSidebarOpen(false);
@@ -658,7 +694,6 @@ export function useProjectsState({
     },
     [isMobile, navigate],
   );
-
   const handleSessionSelect = useCallback(
     (session: ProjectSession) => {
       const normalizedSession = isOrchestratorSession(session)

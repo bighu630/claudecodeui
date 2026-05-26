@@ -1138,6 +1138,10 @@ export function materializeChildSessionFromTool(
   }
 
   const goalAndConstraints = deriveGoalAndConstraints(input);
+
+  if (goalAndConstraints === '待补充目标') {
+    return null;
+  }
   const title = deriveChildTitle(childType, input);
   const explicitProvider = deriveExplicitProvider(input);
   const explicitModel = deriveExplicitModel(input);

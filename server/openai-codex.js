@@ -346,6 +346,9 @@ export async function queryCodex(command, options = {}, ws) {
               msg.result ||
               transformed.result ||
               transformed.item?.result ||
+              (transformed.item?.receiver_thread_ids?.length
+                ? transformed.item.receiver_thread_ids[0]
+                : null) ||
               null,
           });
         }

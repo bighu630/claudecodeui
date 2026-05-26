@@ -524,3 +524,36 @@ In practical priority order:
 2. make `run_status` transitions strictly reflect provider startup/completion timing
 3. decide whether pending `feature_lead` sessions should appear in the tree
 4. continue moving project/session reads from provider-bucket compatibility toward orchestrator-first reads
+
+---
+
+## Frontend Session Selection Flow (2026-05-26)
+
+### Project data does not carry orchestrator sessions
+
+`GET /api/projects` returns only provider-bucketed sessions (claude/cursor/codex/gemini) via `projects-with-sessions-fetch.service.ts`. Orchestrator sessions are fetched separately through `GET /api/orchestrator/projects/:projectId/tree`.
+
+This separation means the frontend cannot rely on project data to know whether orchestrator root sessions exist for a project.
+
+### Orchestrator tree is loaded lazily in the sidebar
+
+`SidebarProjectSessions.tsx` calls `useSessionTree(projectId)` only when the project is expanded. The tree data is not part of the initial project list payload. This means tree availability is gated on user interaction (expanding a project) and cannot be assumed at the time of project selection.
+
+### Project click auto-navigates to tech_lead
+
+`handleProjectSelect` in `useProjectsState.ts` now fetches the orchestrator tree asynchronously after setting the project. Behavior:
+
+- If the tree contains `tech_lead` → auto-select and navigate to it.
+- If no `tech_lead` but `ops` exists → auto-select and navigate to ops.
+- If no root at all → clear `selectedProject` to show global empty state (not the "new session" page).
+- Network error → silently remain on current page.
+- Race guard via `latestProjectSelectRef` prevents stale responses from overwriting a newer project selection.
+
+### Two distinct empty states
+
+`MainContent.tsx` has two no-session states that look different to the user:
+
+1. **Global empty**: `selectedProject === null` → `MainContentStateView mode="empty"`. Shows when no project is selected at all.
+2. **New session page**: `selectedProject !== null` but `selectedSession === null` → ChatInterface renders its "start new chat" UI. This is the legacy "new session" entry point.
+
+The project-click fix above deliberately routes to state 1 (global empty) when orchestrator roots are absent, rather than leaving the user on state 2.
