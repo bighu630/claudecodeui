@@ -1,12 +1,11 @@
 import { useEffect } from 'react';
 import type { TFunction } from 'i18next';
 
-import type { LoadingProgress, Project, ProjectSession, LLMProvider } from '../../../../types/app';
+import type { AppSocketMessage, LoadingProgress, Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { MCPServerStatus, SessionWithProvider } from '../../types/types';
 
 import SidebarProjectItem from './SidebarProjectItem';
 import SidebarProjectsState from './SidebarProjectsState';
-
 export type SidebarProjectListProps = {
   projects: Project[];
   filteredProjects: Project[];
@@ -14,6 +13,7 @@ export type SidebarProjectListProps = {
   selectedSession: ProjectSession | null;
   isLoading: boolean;
   loadingProgress: LoadingProgress | null;
+  latestMessage: AppSocketMessage | null;
   expandedProjects: Set<string>;
   editingProject: string | null;
   editingName: string;
@@ -33,6 +33,7 @@ export type SidebarProjectListProps = {
   onProjectSelect: (project: Project) => void;
   onToggleStarProject: (projectName: string) => void;
   onStartEditingProject: (project: Project) => void;
+  onOpenProjectSettings: (project: Project) => void;
   onCancelEditingProject: () => void;
   onSaveProjectName: (projectName: string) => void;
   onDeleteProject: (project: Project) => void;
@@ -58,6 +59,7 @@ export default function SidebarProjectList({
   selectedSession,
   isLoading,
   loadingProgress,
+  latestMessage,
   expandedProjects,
   editingProject,
   editingName,
@@ -77,6 +79,7 @@ export default function SidebarProjectList({
   onProjectSelect,
   onToggleStarProject,
   onStartEditingProject,
+  onOpenProjectSettings,
   onCancelEditingProject,
   onSaveProjectName,
   onDeleteProject,
@@ -123,6 +126,7 @@ export default function SidebarProjectList({
               selectedProject={selectedProject}
               selectedSession={selectedSession}
               isExpanded={expandedProjects.has(project.projectId)}
+              latestMessage={latestMessage}
               isDeleting={deletingProjects.has(project.projectId)}
               isStarred={isProjectStarred(project.projectId)}
               editingProject={editingProject}
@@ -140,6 +144,7 @@ export default function SidebarProjectList({
               onProjectSelect={onProjectSelect}
               onToggleStarProject={onToggleStarProject}
               onStartEditingProject={onStartEditingProject}
+              onOpenProjectSettings={onOpenProjectSettings}
               onCancelEditingProject={onCancelEditingProject}
               onSaveProjectName={onSaveProjectName}
               onDeleteProject={onDeleteProject}
@@ -154,6 +159,8 @@ export default function SidebarProjectList({
               t={t}
             />
           ))}
+
+
     </div>
   );
 }

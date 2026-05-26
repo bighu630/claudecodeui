@@ -1,5 +1,5 @@
 import { authenticatedFetch } from '../../../utils/api';
-import type { LLMProvider, ProjectSession } from '../../../types/app';
+import type { LLMProvider, SessionTreeNode } from '../../../types/app';
 
 import { useApiSource } from './useApiSource';
 
@@ -10,10 +10,16 @@ export type SessionResult = {
 };
 
 interface SessionsResponse {
-  sessions?: ProjectSession[];
-  cursorSessions?: ProjectSession[];
-  codexSessions?: ProjectSession[];
-  geminiSessions?: ProjectSession[];
+  tree?: SessionTreeNode[];
+}
+
+const flattenTree = (nodes: SessionTreeNode[]): SessionTreeNode[] => {
+  const result: SessionTreeNode[] = [];
+  for (const node of nodes) {
+    result.push(node);
+    result.push(...flattenTree(node.children ?? []));
+  }
+  return result;
 }
 
 export function useSessionsSource(projectId: string | undefined, enabled: boolean) {
@@ -21,23 +27,16 @@ export function useSessionsSource(projectId: string | undefined, enabled: boolea
     enabled: enabled && !!projectId,
     deps: [projectId],
     fetcher: (signal) => {
-      const params = new URLSearchParams({ limit: '50', offset: '0' });
       return authenticatedFetch(
-        `/api/projects/${encodeURIComponent(projectId!)}/sessions?${params.toString()}`,
+        `/api/orchestrator/projects/${encodeURIComponent(projectId!)}/tree`,
         { signal },
       );
     },
     parse: (data) => {
-      const all: ProjectSession[] = [
-        ...(data.sessions ?? []),
-        ...(data.cursorSessions ?? []),
-        ...(data.codexSessions ?? []),
-        ...(data.geminiSessions ?? []),
-      ];
-      return all.map<SessionResult>((s) => ({
-        id: s.id,
-        label: (s.title || s.summary || s.name || s.id) as string,
-        provider: s.__provider,
+      return flattenTree(data.tree ?? []).map<SessionResult>((session) => ({
+        id: session.id,
+        label: session.title || session.summary_text || session.id,
+        provider: session.provider ?? undefined,
       }));
     },
   });

@@ -5,6 +5,7 @@ import path from 'node:path';
 import type { IProviderSessions } from '@/shared/interfaces.js';
 import type { AnyRecord, FetchHistoryOptions, FetchHistoryResult, NormalizedMessage } from '@/shared/types.js';
 import { createNormalizedMessage, generateMessageId, readObjectRecord } from '@/shared/utils.js';
+import { extractVisibleOrchestratorUserMessage } from '@/modules/orchestrator/index.js';
 
 const PROVIDER = 'cursor';
 
@@ -49,6 +50,11 @@ function isInternalCursorPart(part: unknown): boolean {
 }
 
 function unwrapUserQueryText(value: string, role: 'user' | 'assistant'): string {
+  const visibleOrchestratorText = extractVisibleOrchestratorUserMessage(value);
+  if (visibleOrchestratorText !== null) {
+    return visibleOrchestratorText;
+  }
+
   if (role !== 'user') {
     return value;
   }

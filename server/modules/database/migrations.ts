@@ -3,11 +3,17 @@ import { Database } from 'better-sqlite3';
 import {
   APP_CONFIG_TABLE_SCHEMA_SQL,
   LAST_SCANNED_AT_SQL,
+  ORCHESTRATOR_SESSIONS_TABLE_SQL,
+  PROJECT_KNOWLEDGE_TABLE_SQL,
+  PROJECT_ROLE_MODEL_CONFIGS_TABLE_SCHEMA_SQL,
   PROJECTS_TABLE_SCHEMA_SQL,
   PUSH_SUBSCRIPTIONS_TABLE_SCHEMA_SQL,
+  SESSION_ARTIFACTS_TABLE_SQL,
+  SESSION_EVENTS_TABLE_SQL,
   SESSIONS_TABLE_SCHEMA_SQL,
   USER_NOTIFICATION_PREFERENCES_TABLE_SCHEMA_SQL,
   VAPID_KEYS_TABLE_SCHEMA_SQL,
+  WORKER_TASK_SPECS_TABLE_SQL,
 } from '@/modules/database/schema.js';
 
 const SQLITE_UUID_SQL = `
@@ -45,6 +51,65 @@ const tableExists = (db: Database, tableName: string): boolean =>
 
 const getTableInfo = (db: Database, tableName: string): TableInfoRow[] =>
   db.prepare(`PRAGMA table_info(${tableName})`).all() as TableInfoRow[];
+
+const dedupeOrchestratorRootSessions = (db: Database): void => {
+  if (!tableExists(db, 'orchestrator_sessions')) {
+    return;
+  }
+
+  const duplicates = db.prepare(`
+    SELECT project_id, type, COUNT(*) AS row_count
+    FROM orchestrator_sessions
+    WHERE parent_id IS NULL
+      AND type IN ('tech_lead', 'ops')
+      AND lifecycle_status != 'archived'
+    GROUP BY project_id, type
+    HAVING COUNT(*) > 1
+  `).all() as Array<{ project_id: string; type: 'tech_lead' | 'ops'; row_count: number }>;
+
+  if (duplicates.length === 0) {
+    return;
+  }
+
+  console.log('Running migration: Deduplicating active orchestrator root sessions');
+
+  const findRows = db.prepare(`
+    SELECT id
+    FROM orchestrator_sessions
+    WHERE project_id = ?
+      AND type = ?
+      AND parent_id IS NULL
+      AND lifecycle_status != 'archived'
+    ORDER BY created_at ASC, id ASC
+  `);
+  const reparentChildren = db.prepare(`
+    UPDATE orchestrator_sessions
+    SET parent_id = ?, updated_at = datetime('now')
+    WHERE parent_id = ?
+  `);
+  const archiveSession = db.prepare(`
+    UPDATE orchestrator_sessions
+    SET lifecycle_status = 'archived',
+        archived_at = datetime('now'),
+        updated_at = datetime('now')
+    WHERE id = ?
+  `);
+
+  for (const duplicate of duplicates) {
+    const rows = findRows.all(duplicate.project_id, duplicate.type) as Array<{ id: string }>;
+    const canonical = rows[0];
+    if (!canonical) {
+      continue;
+    }
+
+    for (const extra of rows.slice(1)) {
+      if (duplicate.type === 'tech_lead') {
+        reparentChildren.run(canonical.id, extra.id);
+      }
+      archiveSession.run(extra.id);
+    }
+  }
+};
 
 const migrateLegacySessionNames = (db: Database): void => {
   const hasLegacySessionNamesTable = tableExists(db, 'session_names');
@@ -423,6 +488,7 @@ export const runMigrations = (db: Database) => {
     db.exec('CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user_id ON push_subscriptions(user_id)');
 
     db.exec(PROJECTS_TABLE_SCHEMA_SQL);
+    db.exec(PROJECT_ROLE_MODEL_CONFIGS_TABLE_SCHEMA_SQL);
     rebuildProjectsTableWithPrimaryKeySchema(db);
 
     migrateLegacyWorkspaceTableIntoProjects(db);
@@ -447,6 +513,63 @@ export const runMigrations = (db: Database) => {
     }
 
     db.exec(LAST_SCANNED_AT_SQL);
+
+    // ── Orchestrator tables (V1) ──
+    db.exec(ORCHESTRATOR_SESSIONS_TABLE_SQL);
+    dedupeOrchestratorRootSessions(db);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_orch_sessions_project ON orchestrator_sessions(project_id)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_orch_sessions_parent ON orchestrator_sessions(parent_id)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_orch_sessions_type ON orchestrator_sessions(type)');
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_orch_root_tech_lead_unique
+      ON orchestrator_sessions(project_id)
+      WHERE parent_id IS NULL AND type = 'tech_lead' AND lifecycle_status != 'archived'
+    `);
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_orch_root_ops_unique
+      ON orchestrator_sessions(project_id)
+      WHERE parent_id IS NULL AND type = 'ops' AND lifecycle_status != 'archived'
+    `);
+
+    db.exec(WORKER_TASK_SPECS_TABLE_SQL);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_task_specs_worker ON worker_task_specs(worker_session_id)');
+
+    db.exec(SESSION_EVENTS_TABLE_SQL);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_session_events_session ON session_events(session_id)');
+
+    db.exec(SESSION_ARTIFACTS_TABLE_SQL);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_artifacts_session ON session_artifacts(session_id)');
+
+    db.exec(PROJECT_KNOWLEDGE_TABLE_SQL);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_project_knowledge_project ON project_knowledge(project_id)');
+
+    // V1.1: Allow NULL provider for uninitialized sessions
+    const orchTableInfo = getTableInfo(db, 'orchestrator_sessions');
+    const orchProviderCol = orchTableInfo.find(col => col.name === 'provider');
+    const orchProviderNotNull = orchProviderCol && db.prepare(
+      "SELECT \"notnull\" FROM pragma_table_info('orchestrator_sessions') WHERE name = 'provider'"
+    ).get() as { notnull: number } | undefined;
+    if (orchProviderCol && orchProviderNotNull && orchProviderNotNull.notnull === 1) {
+      console.log('Running migration: Making orchestrator_sessions.provider nullable');
+      db.exec('PRAGMA foreign_keys = OFF');
+      try {
+        db.exec('ALTER TABLE orchestrator_sessions RENAME COLUMN provider TO provider_old');
+        db.exec('ALTER TABLE orchestrator_sessions ADD COLUMN provider TEXT');
+        db.exec('UPDATE orchestrator_sessions SET provider = provider_old');
+        db.exec('ALTER TABLE orchestrator_sessions DROP COLUMN provider_old');
+      } finally {
+        db.exec('PRAGMA foreign_keys = ON');
+      }
+    }
+
+    addColumnToTableIfNotExists(
+      db,
+      'orchestrator_sessions',
+      getTableInfo(db, 'orchestrator_sessions').map((column) => column.name),
+      'model',
+      'TEXT',
+    );
+
     console.log('Database migrations completed successfully');
   } catch (error: any) {
     console.error('Error running migrations:', error.message);

@@ -10,6 +10,7 @@ import { useGithubTokens } from './hooks/useGithubTokens';
 import { cloneWorkspaceWithProgress, createProjectRequest } from './data/workspaceApi';
 import { isCloneWorkflow, shouldShowGithubAuthentication } from './utils/pathUtils';
 import type { TokenMode, WizardFormState, WizardStep } from './types';
+import { cloneDefaultProjectRoleModelConfig } from '../project-role-config/roleModelConfig';
 
 type ProjectCreationWizardProps = {
   onClose: () => void;
@@ -22,6 +23,7 @@ const initialFormState: WizardFormState = {
   tokenMode: 'stored',
   selectedGithubToken: '',
   newGithubToken: '',
+  roleModelConfig: cloneDefaultProjectRoleModelConfig(),
 };
 
 export default function ProjectCreationWizard({
@@ -96,6 +98,7 @@ export default function ProjectCreationWizard({
             tokenMode: formState.tokenMode,
             selectedGithubToken: formState.selectedGithubToken,
             newGithubToken: formState.newGithubToken,
+            roleModelConfig: formState.roleModelConfig,
           },
           {
             onProgress: setCloneProgress,
@@ -109,6 +112,7 @@ export default function ProjectCreationWizard({
 
       const project = await createProjectRequest({
         path: formState.workspacePath.trim(),
+        roleModelConfig: formState.roleModelConfig,
       });
 
       onProjectCreated?.(project);
@@ -162,6 +166,7 @@ export default function ProjectCreationWizard({
               tokenMode={formState.tokenMode}
               selectedGithubToken={formState.selectedGithubToken}
               newGithubToken={formState.newGithubToken}
+              roleModelConfig={formState.roleModelConfig}
               availableTokens={availableTokens}
               loadingTokens={loadingTokens}
               tokenLoadError={tokenLoadError}
@@ -175,6 +180,7 @@ export default function ProjectCreationWizard({
               onNewGithubTokenChange={(newGithubToken) =>
                 updateField('newGithubToken', newGithubToken)
               }
+              onRoleModelConfigChange={(roleModelConfig) => updateField('roleModelConfig', roleModelConfig)}
               onAdvanceToConfirm={() => setStep(2)}
             />
           )}

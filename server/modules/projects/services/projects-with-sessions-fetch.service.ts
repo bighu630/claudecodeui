@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
+import type { ProjectRoleModelConfig } from '@/modules/projects/project-role-config.js';
 import { sessionSynchronizerService } from '@/modules/providers/index.js';
 import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
 import type { RealtimeClientConnection } from '@/shared/types.js';
@@ -30,6 +31,7 @@ export type ProjectListItem = {
   displayName: string;
   fullPath: string;
   isStarred: boolean;
+  roleModelConfig: ProjectRoleModelConfig;
   sessions: SessionSummary[];
   cursorSessions: SessionSummary[];
   codexSessions: SessionSummary[];
@@ -249,6 +251,7 @@ export async function getProjectsWithSessions(
       displayName,
       fullPath: projectPath,
       isStarred: Boolean(row.isStarred),
+      roleModelConfig: projectsDb.getProjectRoleModelConfig(projectId),
       sessions: sessionsPage.sessionsByProvider.claude,
       cursorSessions: sessionsPage.sessionsByProvider.cursor,
       codexSessions: sessionsPage.sessionsByProvider.codex,
@@ -305,6 +308,7 @@ export async function getArchivedProjectsWithSessions(
       fullPath: row.project_path,
       isStarred: Boolean(row.isStarred),
       isArchived: true,
+      roleModelConfig: projectsDb.getProjectRoleModelConfig(row.project_id),
       sessions: sessionsPage.sessionsByProvider.claude,
       cursorSessions: sessionsPage.sessionsByProvider.cursor,
       codexSessions: sessionsPage.sessionsByProvider.codex,

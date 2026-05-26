@@ -4,6 +4,13 @@ import path from 'node:path';
 import { getConnection } from '@/modules/database/connection.js';
 import type { CreateProjectPathResult, ProjectRepositoryRow } from '@/shared/types.js';
 import { normalizeProjectPath } from '@/shared/utils.js';
+import {
+    getDefaultProjectRoleModelConfig,
+    normalizeProjectRoleModelConfig,
+    PROJECT_ROLE_TYPES,
+    type ProjectRoleModelConfig,
+    type ProjectRoleType,
+} from '@/modules/projects/index.js';
 
 function normalizeProjectDisplayName(projectPath: string, customProjectName: string | null): string {
     const trimmedCustomName = typeof customProjectName === 'string' ? customProjectName.trim() : '';
@@ -192,5 +199,55 @@ export const projectsDb = {
             DELETE FROM projects
             WHERE project_id = ?
         `).run(projectId);
+    },
+
+    getProjectRoleModelConfig(projectId: string): ProjectRoleModelConfig {
+        const db = getConnection();
+        const rows = db.prepare(`
+            SELECT role_type, provider, model
+            FROM project_role_model_configs
+            WHERE project_id = ?
+        `).all(projectId) as Array<{
+            role_type: ProjectRoleType;
+            provider: ProjectRoleModelConfig[ProjectRoleType]['provider'];
+            model: string;
+        }>;
+
+        const config = getDefaultProjectRoleModelConfig();
+        for (const row of rows) {
+            if (!PROJECT_ROLE_TYPES.includes(row.role_type)) {
+                continue;
+            }
+
+            config[row.role_type] = {
+                provider: row.provider,
+                model: row.model,
+            };
+        }
+
+        return config;
+    },
+
+    saveProjectRoleModelConfig(projectId: string, input: unknown): ProjectRoleModelConfig {
+        const db = getConnection();
+        const config = normalizeProjectRoleModelConfig(input);
+        const upsert = db.prepare(`
+            INSERT INTO project_role_model_configs (project_id, role_type, provider, model, updated_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(project_id, role_type) DO UPDATE SET
+                provider = excluded.provider,
+                model = excluded.model,
+                updated_at = CURRENT_TIMESTAMP
+        `);
+
+        const saveMany = db.transaction((projectRoleConfig: ProjectRoleModelConfig) => {
+            for (const roleType of PROJECT_ROLE_TYPES) {
+                const entry = projectRoleConfig[roleType];
+                upsert.run(projectId, roleType, entry.provider, entry.model);
+            }
+        });
+
+        saveMany(config);
+        return config;
     },
 };

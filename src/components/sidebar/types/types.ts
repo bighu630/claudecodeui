@@ -1,4 +1,4 @@
-import type { LoadingProgress, Project, ProjectSession, LLMProvider } from '../../../types/app';
+import type { AppSocketMessage, LoadingProgress, Project, ProjectSession, LLMProvider } from '../../../types/app';
 
 export type ProjectSortOrder = 'name' | 'date';
 export type SidebarSearchMode = 'projects' | 'conversations' | 'archived';
@@ -50,6 +50,7 @@ export type SidebarProps = {
   onProjectDelete?: (projectId: string) => void;
   isLoading: boolean;
   loadingProgress: LoadingProgress | null;
+  latestMessage: AppSocketMessage | null;
   onRefresh: () => Promise<void> | void;
   onShowSettings: () => void;
   showSettings: boolean;

@@ -12,6 +12,7 @@ type CloneProjectInput = {
   githubUrl: string;
   githubTokenId?: number | null;
   newGithubToken?: string | null;
+  roleModelConfig?: unknown;
   userId: number | string;
 };
 
@@ -43,7 +44,11 @@ type CloneProjectDependencies = {
     userId: number,
   ) => Promise<{ github_token: string } | null>;
   spawnGitClone: (cloneUrl: string, clonePath: string) => GitCloneProcess;
-  registerProject: (projectPath: string, customName: string) => Promise<{ project: Record<string, unknown> }>;
+  registerProject: (
+    projectPath: string,
+    customName: string,
+    roleModelConfig?: unknown,
+  ) => Promise<{ project: Record<string, unknown> }>;
   logError: (message: string, error: unknown) => void;
 };
 
@@ -135,10 +140,12 @@ const defaultDependencies: CloneProjectDependencies = {
   registerProject: async (
     projectPath: string,
     customName: string,
+    roleModelConfig?: unknown,
   ): Promise<{ project: Record<string, unknown> }> =>
     createProject({
       projectPath,
       customName,
+      roleModelConfig,
     }) as Promise<{ project: Record<string, unknown> }>,
   logError: (message: string, error: unknown): void => {
     console.error(message, error);
@@ -258,7 +265,7 @@ export async function startCloneProject(
     gitProcess.on('close', async (code) => {
       if (code === 0) {
         try {
-          const createdProject = await dependencies.registerProject(clonePath, repoName);
+          const createdProject = await dependencies.registerProject(clonePath, repoName, input.roleModelConfig);
           handlers.onComplete({
             project: createdProject.project,
             message: 'Repository cloned successfully',

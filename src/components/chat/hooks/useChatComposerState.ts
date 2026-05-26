@@ -22,6 +22,12 @@ import type {
 } from '../types/types';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import { escapeRegExp } from '../utils/chatFormatting';
+import { resolveSessionModel, resolveSessionProvider } from '../utils/orchestratorSessionConfig';
+import {
+  getSessionOrchestratorId,
+  getSessionRuntimeId,
+  isOrchestratorSession,
+} from '../../../utils/sessionIdentity';
 
 import { useFileMentions } from './useFileMentions';
 import { type SlashCommand, useSlashCommands } from './useSlashCommands';
@@ -532,8 +538,23 @@ export function useChatComposerState({
         }
       }
 
-      const effectiveSessionId =
-        currentSessionId || selectedSession?.id || sessionStorage.getItem('cursorSessionId');
+      const isOrchSession = isOrchestratorSession(selectedSession);
+      const orchestratorSessionId = isOrchSession
+        ? getSessionOrchestratorId(selectedSession)
+        : null;
+      const resolvedProvider = resolveSessionProvider(selectedSession, provider);
+      const resolvedModel = resolveSessionModel(selectedSession, resolvedProvider, {
+        claudeModel,
+        cursorModel,
+        codexModel,
+        geminiModel,
+      });
+      const effectiveSessionId = isOrchSession
+        ? getSessionRuntimeId(selectedSession, currentSessionId)
+        : (currentSessionId || selectedSession?.id || sessionStorage.getItem('cursorSessionId'));
+      const visibleSessionId = isOrchSession
+        ? (effectiveSessionId || currentSessionId || null)
+        : effectiveSessionId;
 
       const userMessage: ChatMessage = {
         type: 'user',
@@ -563,19 +584,19 @@ export function useChatComposerState({
         // emits `session_created` with the canonical provider session id.
         pendingViewSessionRef.current = { sessionId: null, startedAt: Date.now() };
       }
-      if (effectiveSessionId) {
-        onSessionActive?.(effectiveSessionId);
-        onSessionProcessing?.(effectiveSessionId);
+      if (visibleSessionId) {
+        onSessionActive?.(visibleSessionId);
+        onSessionProcessing?.(visibleSessionId);
       }
 
       const getToolsSettings = () => {
         try {
           const settingsKey =
-            provider === 'cursor'
+            resolvedProvider === 'cursor'
               ? 'cursor-tools-settings'
-              : provider === 'codex'
+              : resolvedProvider === 'codex'
                 ? 'codex-settings'
-                : provider === 'gemini'
+                : resolvedProvider === 'gemini'
                   ? 'gemini-settings'
                   : 'claude-settings';
           const savedSettings = safeLocalStorage.getItem(settingsKey);
@@ -597,7 +618,7 @@ export function useChatComposerState({
       const resolvedProjectPath = selectedProject.fullPath || selectedProject.path || '';
       const sessionSummary = getNotificationSessionSummary(selectedSession, currentInput);
 
-      if (provider === 'cursor') {
+      if (resolvedProvider === 'cursor') {
         sendMessage({
           type: 'cursor-command',
           command: messageContent,
@@ -607,13 +628,14 @@ export function useChatComposerState({
             projectPath: resolvedProjectPath,
             sessionId: effectiveSessionId,
             resume: Boolean(effectiveSessionId),
-            model: cursorModel,
+            model: resolvedModel,
             skipPermissions: toolsSettings?.skipPermissions || false,
             sessionSummary,
             toolsSettings,
+            orchestratorSessionId: orchestratorSessionId || undefined,
           },
         });
-      } else if (provider === 'codex') {
+      } else if (resolvedProvider === 'codex') {
         sendMessage({
           type: 'codex-command',
           command: messageContent,
@@ -623,12 +645,13 @@ export function useChatComposerState({
             projectPath: resolvedProjectPath,
             sessionId: effectiveSessionId,
             resume: Boolean(effectiveSessionId),
-            model: codexModel,
+            model: resolvedModel,
             sessionSummary,
             permissionMode: permissionMode === 'plan' ? 'default' : permissionMode,
+            orchestratorSessionId: orchestratorSessionId || undefined,
           },
         });
-      } else if (provider === 'gemini') {
+      } else if (resolvedProvider === 'gemini') {
         sendMessage({
           type: 'gemini-command',
           command: messageContent,
@@ -638,10 +661,11 @@ export function useChatComposerState({
             projectPath: resolvedProjectPath,
             sessionId: effectiveSessionId,
             resume: Boolean(effectiveSessionId),
-            model: geminiModel,
+            model: resolvedModel,
             sessionSummary,
             permissionMode,
             toolsSettings,
+            orchestratorSessionId: orchestratorSessionId || undefined,
           },
         });
       } else {
@@ -655,9 +679,10 @@ export function useChatComposerState({
             resume: Boolean(effectiveSessionId),
             toolsSettings,
             permissionMode,
-            model: claudeModel,
+            model: resolvedModel,
             sessionSummary,
             images: uploadedImages,
+            orchestratorSessionId: orchestratorSessionId || undefined,
           },
         });
       }

@@ -1,3 +1,5 @@
+import type { ProjectRoleModelConfig } from '../../types/app';
+
 export type WizardStep = 1 | 2;
 
 export type TokenMode = 'stored' | 'new' | 'none';
@@ -35,6 +37,7 @@ export type CreateFolderResponse = {
 export type CreateProjectPayload = {
   path: string;
   customName?: string;
+  roleModelConfig: ProjectRoleModelConfig;
 };
 
 export type CreateProjectApiError = {
@@ -63,4 +66,5 @@ export type WizardFormState = {
   tokenMode: TokenMode;
   selectedGithubToken: string;
   newGithubToken: string;
+  roleModelConfig: ProjectRoleModelConfig;
 };

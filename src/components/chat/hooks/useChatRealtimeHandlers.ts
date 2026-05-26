@@ -5,6 +5,7 @@ import { usePaletteOps } from '../../../contexts/PaletteOpsContext';
 import type { PendingPermissionRequest, SessionNavigationOptions } from '../types/types';
 import type { ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
+import { getSessionRuntimeId, isOrchestratorSession } from '../../../utils/sessionIdentity';
 
 type PendingViewSession = {
   sessionId: string | null;
@@ -103,6 +104,7 @@ export function useChatRealtimeHandlers({
     if (lastProcessedMessageRef.current === latestMessage) return;
     lastProcessedMessageRef.current = latestMessage;
 
+    const selectedRuntimeSessionId = getSessionRuntimeId(selectedSession, currentSessionId);
     const activeViewSessionId =
       selectedSession?.id || currentSessionId || pendingViewSessionRef.current?.sessionId || null;
 
@@ -123,7 +125,7 @@ export function useChatRealtimeHandlers({
         case 'pending-permissions-response': {
           const permSessionId = msg.sessionId;
           const isCurrentPermSession =
-            permSessionId === currentSessionId || (selectedSession && permSessionId === selectedSession.id);
+            permSessionId === selectedRuntimeSessionId || permSessionId === selectedSession?.id;
           if (permSessionId && !isCurrentPermSession) return;
           setPendingPermissionRequests(msg.data || []);
           return;
@@ -148,7 +150,7 @@ export function useChatRealtimeHandlers({
 
           // Legacy isProcessing format from check-session-status
           const isCurrentSession =
-            statusSessionId === currentSessionId || (selectedSession && statusSessionId === selectedSession.id);
+            statusSessionId === selectedRuntimeSessionId || statusSessionId === selectedSession?.id;
 
           if (msg.isProcessing) {
             onSessionProcessing?.(statusSessionId);
@@ -175,7 +177,11 @@ export function useChatRealtimeHandlers({
     /*  NormalizedMessage handling (has `kind` field)                    */
     /* ---------------------------------------------------------------- */
 
-    const sid = msg.sessionId || activeViewSessionId;
+    const isSelectedOrchestratorSession = isOrchestratorSession(selectedSession);
+    const sid =
+      isSelectedOrchestratorSession && msg.sessionId && selectedRuntimeSessionId && msg.sessionId === selectedRuntimeSessionId
+        ? selectedSession!.id
+        : (msg.sessionId || activeViewSessionId);
 
     // --- Streaming: buffer for performance ---
     if (msg.kind === 'stream_delta') {
@@ -230,8 +236,8 @@ export function useChatRealtimeHandlers({
         const newSessionId = msg.newSessionId;
         if (!newSessionId) break;
 
-        // We no longer synthesize client-side placeholder IDs. Until the provider
-        // announces `session_created`, the active id is expected to be null.
+        const isOrch = isOrchestratorSession(selectedSession);
+
         if (!currentSessionId) {
           console.log('Session created with ID:', newSessionId);
           console.log('Existing session ID:', currentSessionId);
@@ -244,7 +250,10 @@ export function useChatRealtimeHandlers({
             prev.map((r) => (r.sessionId ? r : { ...r, sessionId: newSessionId })),
           );
         }
-        onNavigateToSession?.(newSessionId);
+
+        if (!isOrch) {
+          onNavigateToSession?.(newSessionId);
+        }
         break;
       }
 
@@ -291,7 +300,7 @@ export function useChatRealtimeHandlers({
             ),
           );
 
-        if (actualSessionId && sid && actualSessionId !== sid) {
+        if (actualSessionId && sid && actualSessionId !== sid && !isSelectedOrchestratorSession) {
           sessionStore.replaceSessionId(sid, actualSessionId);
 
           if (isVisibleSession) {
@@ -313,6 +322,15 @@ export function useChatRealtimeHandlers({
             onNavigateToSession?.(actualSessionId, { replace: true });
             setTimeout(() => { void paletteOps.refreshProjects(); }, 500);
           }
+          break;
+        }
+
+        if (actualSessionId && isSelectedOrchestratorSession) {
+          setCurrentSessionId(actualSessionId);
+          if (completedSuccessfully && pendingSessionId) {
+            sessionStorage.removeItem('pendingSessionId');
+          }
+          setTimeout(() => { void paletteOps.refreshProjects(); }, 500);
           break;
         }
 

@@ -1,8 +1,16 @@
 import { spawn } from 'child_process';
+
 import crossSpawn from 'cross-spawn';
+
+import {
+  bindChildRuntimeFromTool,
+  bindExternalSessionId,
+  finalizeOrchestratorRun,
+  materializeAndBindChildSessionFromTool,
+  prepareOrchestratorCommand,
+} from './modules/orchestrator/index.js';
 import { notifyRunFailed, notifyRunStopped } from './services/notification-orchestrator.js';
-import { sessionsService } from './modules/providers/services/sessions.service.js';
-import { providerAuthService } from './modules/providers/services/provider-auth.service.js';
+import { providerAuthService, sessionsService } from './modules/providers/index.js';
 import { createNormalizedMessage } from './shared/utils.js';
 
 // Use cross-spawn on Windows for better command execution
@@ -32,6 +40,13 @@ async function spawnCursor(command, options = {}, ws) {
     let sessionCreatedSent = false; // Track if we've already sent session-created event
     let hasRetriedWithTrust = false;
     let settled = false;
+    const resolvedCommand = options.orchestratorSessionId
+      ? prepareOrchestratorCommand(options.orchestratorSessionId, command)
+      : command;
+
+    if (options.orchestratorSessionId && capturedSessionId) {
+      bindExternalSessionId(options.orchestratorSessionId, capturedSessionId);
+    }
 
     // Use tools settings passed from frontend, or defaults
     const settings = toolsSettings || {
@@ -48,9 +63,9 @@ async function spawnCursor(command, options = {}, ws) {
       baseArgs.push('--resume=' + sessionId);
     }
 
-    if (command && command.trim()) {
+    if (resolvedCommand && resolvedCommand.trim()) {
       // Provide a prompt (works for both new and resumed sessions)
-      baseArgs.push('-p', command);
+      baseArgs.push('-p', resolvedCommand);
 
       // Add model flag if specified (only meaningful for new sessions; harmless on resume)
       if (!sessionId && model) {
@@ -159,6 +174,10 @@ async function spawnCursor(command, options = {}, ws) {
                 if (response.session_id && !capturedSessionId) {
                   capturedSessionId = response.session_id;
 
+                  if (options.orchestratorSessionId) {
+                    bindExternalSessionId(options.orchestratorSessionId, capturedSessionId);
+                  }
+
                   // Update process key with captured session ID
                   if (processKey !== capturedSessionId) {
                     activeCursorProcesses.delete(processKey);
@@ -189,7 +208,23 @@ async function spawnCursor(command, options = {}, ws) {
               // Accumulate assistant message chunks
               if (response.message && response.message.content && response.message.content.length > 0) {
                 const normalized = sessionsService.normalizeMessage('cursor', response, capturedSessionId || sessionId || null);
-                for (const msg of normalized) ws.send(msg);
+                for (const msg of normalized) {
+                  if (options.orchestratorSessionId && msg.kind === 'tool_use') {
+                    materializeAndBindChildSessionFromTool(options.orchestratorSessionId, {
+                      toolName: msg.toolName,
+                      toolInput: msg.toolInput,
+                      toolId: msg.toolId,
+                      runtimeInfo: msg.toolUseResult || msg.toolResult?.toolUseResult || response,
+                    });
+                  }
+                  if (options.orchestratorSessionId && msg.kind === 'tool_result') {
+                    bindChildRuntimeFromTool(options.orchestratorSessionId, {
+                      toolId: msg.toolId,
+                      runtimeInfo: msg.toolUseResult || msg.toolResult?.toolUseResult || response,
+                    });
+                  }
+                  ws.send(msg);
+                }
               }
               break;
 
@@ -216,7 +251,23 @@ async function spawnCursor(command, options = {}, ws) {
 
           // If not JSON, send as stream delta via adapter
           const normalized = sessionsService.normalizeMessage('cursor', line, capturedSessionId || sessionId || null);
-          for (const msg of normalized) ws.send(msg);
+          for (const msg of normalized) {
+            if (options.orchestratorSessionId && msg.kind === 'tool_use') {
+              materializeAndBindChildSessionFromTool(options.orchestratorSessionId, {
+                toolName: msg.toolName,
+                toolInput: msg.toolInput,
+                toolId: msg.toolId,
+                runtimeInfo: msg.toolUseResult || msg.toolResult?.toolUseResult || line,
+              });
+            }
+            if (options.orchestratorSessionId && msg.kind === 'tool_result') {
+              bindChildRuntimeFromTool(options.orchestratorSessionId, {
+                toolId: msg.toolId,
+                runtimeInfo: msg.toolUseResult || msg.toolResult?.toolUseResult || line,
+              });
+            }
+            ws.send(msg);
+          }
         }
       };
 
@@ -271,9 +322,21 @@ async function spawnCursor(command, options = {}, ws) {
         ws.send(createNormalizedMessage({ kind: 'complete', exitCode: code, isNewSession: !sessionId && !!command, sessionId: finalSessionId, provider: 'cursor' }));
 
         if (code === 0) {
+          if (options.orchestratorSessionId) {
+            finalizeOrchestratorRun(options.orchestratorSessionId, {
+              success: true,
+              runSummary: 'Run completed',
+            });
+          }
           notifyTerminalState({ code });
           settleOnce(() => resolve());
         } else {
+          if (options.orchestratorSessionId) {
+            finalizeOrchestratorRun(options.orchestratorSessionId, {
+              success: false,
+              errorSummary: `Cursor CLI exited with code ${code}`,
+            });
+          }
           notifyTerminalState({ code });
           settleOnce(() => reject(new Error(`Cursor CLI exited with code ${code}`)));
         }
@@ -294,6 +357,12 @@ async function spawnCursor(command, options = {}, ws) {
           : error.message;
 
         ws.send(createNormalizedMessage({ kind: 'error', content: errorContent, sessionId: capturedSessionId || sessionId || null, provider: 'cursor' }));
+        if (options.orchestratorSessionId) {
+          finalizeOrchestratorRun(options.orchestratorSessionId, {
+            success: false,
+            errorSummary: error?.message ?? 'Unknown error',
+          });
+        }
         notifyTerminalState({ error });
 
         settleOnce(() => reject(error));

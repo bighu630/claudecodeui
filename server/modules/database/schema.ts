@@ -79,6 +79,18 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 `;
 
+export const PROJECT_ROLE_MODEL_CONFIGS_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS project_role_model_configs (
+    project_id TEXT NOT NULL,
+    role_type TEXT NOT NULL CHECK(role_type IN ('tech_lead', 'feature_lead', 'worker', 'ops')),
+    provider TEXT NOT NULL CHECK(provider IN ('claude', 'codex', 'cursor', 'gemini')),
+    model TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (project_id, role_type),
+    FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
+);
+`;
+
 export const SESSIONS_TABLE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS sessions (
     session_id TEXT NOT NULL,
@@ -142,6 +154,8 @@ ${PROJECTS_TABLE_SCHEMA_SQL}
 -- NOTE: These indexes are created in migrations after legacy table-shape repairs.
 -- Creating them here can fail on upgraded installs where projects lacks those columns.
 
+${PROJECT_ROLE_MODEL_CONFIGS_TABLE_SCHEMA_SQL}
+
 ${SESSIONS_TABLE_SCHEMA_SQL}
 CREATE INDEX IF NOT EXISTS idx_session_ids_lookup ON sessions(session_id);
 -- NOTE: This index is created in migrations after sessions is rebuilt to include project_path.
@@ -150,4 +164,90 @@ CREATE INDEX IF NOT EXISTS idx_session_ids_lookup ON sessions(session_id);
 ${LAST_SCANNED_AT_SQL}
 
 ${APP_CONFIG_TABLE_SCHEMA_SQL}
+`;
+
+export const ORCHESTRATOR_SESSIONS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS orchestrator_sessions (
+    id TEXT PRIMARY KEY NOT NULL,
+    project_id TEXT NOT NULL,
+    parent_id TEXT,
+    provider TEXT,
+    model TEXT,
+    type TEXT NOT NULL CHECK(type IN ('tech_lead', 'feature_lead', 'worker', 'ops')),
+    title TEXT NOT NULL,
+    interaction_mode TEXT NOT NULL DEFAULT 'conversational' CHECK(interaction_mode IN ('conversational', 'managed')),
+    lifecycle_status TEXT NOT NULL DEFAULT 'active' CHECK(lifecycle_status IN ('active', 'completed', 'failed', 'archived')),
+    run_status TEXT NOT NULL DEFAULT 'idle' CHECK(run_status IN ('idle', 'queued', 'running', 'waiting_input', 'blocked')),
+    external_session_id TEXT,
+    system_prompt TEXT NOT NULL DEFAULT '',
+    role_prompt TEXT NOT NULL DEFAULT '',
+    project_knowledge_snapshot TEXT DEFAULT '',
+    goal_and_constraints TEXT DEFAULT '',
+    workspace_path TEXT,
+    auto_run INTEGER NOT NULL DEFAULT 0,
+    summary_text TEXT DEFAULT '',
+    last_run_summary TEXT DEFAULT '',
+    last_error_summary TEXT DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    archived_at TEXT,
+    FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
+);
+`;
+
+export const WORKER_TASK_SPECS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS worker_task_specs (
+    id TEXT PRIMARY KEY NOT NULL,
+    worker_session_id TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    objective TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    constraints TEXT NOT NULL,
+    input_context TEXT NOT NULL,
+    expected_output TEXT NOT NULL,
+    acceptance_criteria TEXT NOT NULL,
+    created_by_session_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (worker_session_id) REFERENCES orchestrator_sessions(id) ON DELETE CASCADE,
+    FOREIGN KEY (created_by_session_id) REFERENCES orchestrator_sessions(id) ON DELETE SET NULL
+);
+`;
+
+export const SESSION_EVENTS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS session_events (
+    id TEXT PRIMARY KEY NOT NULL,
+    session_id TEXT NOT NULL,
+    run_id TEXT,
+    event_type TEXT NOT NULL CHECK(event_type IN (
+        'session_created', 'run_queued', 'run_started', 'run_finished',
+        'status_changed', 'child_session_created', 'task_spec_created',
+        'summary_updated', 'error_recorded', 'archived'
+    )),
+    payload_json TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (session_id) REFERENCES orchestrator_sessions(id) ON DELETE CASCADE
+);
+`;
+
+export const SESSION_ARTIFACTS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS session_artifacts (
+    id TEXT PRIMARY KEY NOT NULL,
+    session_id TEXT NOT NULL,
+    artifact_type TEXT NOT NULL CHECK(artifact_type IN ('solution_plan', 'acceptance_note', 'test_note', 'run_result')),
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (session_id) REFERENCES orchestrator_sessions(id) ON DELETE CASCADE
+);
+`;
+
+export const PROJECT_KNOWLEDGE_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS project_knowledge (
+    id TEXT PRIMARY KEY NOT NULL,
+    project_id TEXT NOT NULL UNIQUE,
+    content TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
+);
 `;

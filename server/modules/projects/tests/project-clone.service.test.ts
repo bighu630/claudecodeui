@@ -1,9 +1,15 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 
+import { closeConnection, initializeDatabase, projectsDb } from '@/modules/database/index.js';
+import { getDefaultProjectRoleModelConfig } from '@/modules/projects/index.js';
+import { ensureProjectOrchestratorBootstrap, getSessionTree } from '@/modules/orchestrator/index.js';
+import { createProject } from '@/modules/projects/services/project-management.service.js';
 import { startCloneProject } from '@/modules/projects/services/project-clone.service.js';
 import { AppError } from '@/shared/utils.js';
 
@@ -39,6 +45,29 @@ function createMockGitProcess() {
   };
 
   return emitter;
+}
+
+async function withIsolatedDatabase(runTest: (workspaceRoot: string) => void | Promise<void>): Promise<void> {
+  const previousDatabasePath = process.env.DATABASE_PATH;
+  const tempDirectory = await mkdtemp(path.join(tmpdir(), 'project-clone-db-'));
+  const databasePath = path.join(tempDirectory, 'auth.db');
+  const workspaceRoot = path.join(tempDirectory, 'workspace');
+
+  closeConnection();
+  process.env.DATABASE_PATH = databasePath;
+  await initializeDatabase();
+
+  try {
+    await runTest(workspaceRoot);
+  } finally {
+    closeConnection();
+    if (previousDatabasePath === undefined) {
+      delete process.env.DATABASE_PATH;
+    } else {
+      process.env.DATABASE_PATH = previousDatabasePath;
+    }
+    await rm(tempDirectory, { recursive: true, force: true });
+  }
 }
 
 test('startCloneProject rejects when workspace path is missing', async () => {
@@ -180,4 +209,63 @@ test('startCloneProject completes and emits complete payload when git exits succ
   };
   assert.equal(resolvedCompletePayload.message, 'Repository cloned successfully');
   assert.equal((resolvedCompletePayload.project.projectId as string) || '', 'project-1');
+});
+
+test('startCloneProject bootstraps orchestrator roots when clone registration succeeds', async () => {
+  await withIsolatedDatabase(async (workspaceRoot) => {
+    const gitProcess = createMockGitProcess();
+    let completePayload: { project: Record<string, unknown>; message: string } | null = null;
+
+    const operation = await startCloneProject(
+      {
+        workspacePath: workspaceRoot,
+        githubUrl: 'https://github.com/example/repo.git',
+        userId: 1,
+      },
+      {
+        onProgress: () => undefined,
+        onComplete: (payload) => {
+          completePayload = payload;
+        },
+      },
+      buildDependencies({
+        validatePath: async () => ({ valid: true, resolvedPath: workspaceRoot }),
+        spawnGitClone: () => gitProcess as any,
+        registerProject: async (projectPath, customName, roleModelConfig) =>
+          createProject(
+            {
+              projectPath,
+              customName,
+              roleModelConfig,
+            },
+            {
+              validatePath: async () => ({ valid: true, resolvedPath: projectPath }),
+              ensureWorkspaceDirectory: async () => undefined,
+              persistProjectPath: (resolvedPath, resolvedCustomName) =>
+                projectsDb.createProjectPath(resolvedPath, resolvedCustomName),
+              persistProjectRoleModelConfig: (projectId, config) =>
+                projectsDb.saveProjectRoleModelConfig(projectId, config ?? getDefaultProjectRoleModelConfig()),
+              getProjectRoleModelConfig: (projectId) => projectsDb.getProjectRoleModelConfig(projectId),
+              getProjectByPath: (resolvedPath) => projectsDb.getProjectPath(resolvedPath),
+              bootstrapOrchestrator: ({ projectId, workspacePath }) => {
+                ensureProjectOrchestratorBootstrap({ projectId, workspacePath });
+              },
+            },
+          ) as Promise<{ project: Record<string, unknown> }>,
+      }),
+    );
+
+    gitProcess.emit('close', 0);
+    await operation.waitForCompletion;
+
+    assert.ok(completePayload);
+    const projectId = String((completePayload as { project: Record<string, unknown> }).project.projectId || '');
+    assert.ok(projectId);
+
+    const tree = getSessionTree(projectId);
+    assert.deepEqual(
+      tree.map((node) => node.type),
+      ['tech_lead', 'ops'],
+    );
+  });
 });

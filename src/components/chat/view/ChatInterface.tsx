@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 
 import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
 import PermissionContext from '../../../contexts/PermissionContext';
+import { useSessionDetail } from '../../../hooks/useSessionTree';
 import { QuickSettingsPanel } from '../../quick-settings-panel';
 import type { ChatInterfaceProps, Provider  } from '../types/types';
 import type { LLMProvider } from '../../../types/app';
@@ -11,6 +12,8 @@ import { useChatSessionState } from '../hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
 import { useSessionStore } from '../../../stores/useSessionStore';
+import { resolveSessionProvider } from '../utils/orchestratorSessionConfig';
+import { getSessionOrchestratorId, getSessionRuntimeId, isOrchestratorSession } from '../../../utils/sessionIdentity';
 
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
@@ -209,8 +212,12 @@ function ChatInterface({
   const handleWebSocketReconnect = useCallback(async () => {
     if (!selectedProject || !selectedSession) return;
     const providerVal = (localStorage.getItem('selected-provider') as LLMProvider) || 'claude';
+    const sessionProvider = resolveSessionProvider(selectedSession, providerVal);
+    const providerSessionId = getSessionRuntimeId(selectedSession);
+    if (!providerSessionId) return;
     await sessionStore.refreshFromServer(selectedSession.id, {
-      provider: (selectedSession.__provider || providerVal) as LLMProvider,
+      provider: sessionProvider,
+      providerSessionId,
       // Use DB projectId; legacy folder-derived projectName is no longer accepted here.
       projectId: selectedProject.projectId,
       projectPath: selectedProject.fullPath || selectedProject.path || '',
@@ -272,6 +279,12 @@ function ChatInterface({
     handlePermissionDecision,
   }), [pendingPermissionRequests, handlePermissionDecision]);
 
+  const isOrchSession = isOrchestratorSession(selectedSession);
+  const selectedOrchestratorSessionId = isOrchSession
+    ? getSessionOrchestratorId(selectedSession)
+    : null;
+  const { taskSpec } = useSessionDetail(selectedOrchestratorSessionId);
+
   if (!selectedProject) {
     const selectedProviderLabel =
       provider === 'cursor'
@@ -299,6 +312,14 @@ function ChatInterface({
   return (
     <PermissionContext.Provider value={permissionContextValue}>
       <div className="flex h-full flex-col">
+        {(selectedSession as any)?.type === 'worker' && taskSpec && (
+          <div className="mx-4 mt-2 p-3 rounded border bg-muted/30 text-xs">
+            <div className="font-semibold mb-1">任务单：{taskSpec.title}</div>
+            <div className="text-muted-foreground">目标：{taskSpec.objective}</div>
+            <div className="text-muted-foreground">范围：{taskSpec.scope}</div>
+          </div>
+        )}
+
         <ChatMessagesPane
           scrollContainerRef={scrollContainerRef}
           onWheel={handleScroll}
@@ -344,7 +365,8 @@ function ChatInterface({
           selectedProject={selectedProject}
         />
 
-        <ChatComposer
+        {(selectedSession as any)?.interaction_mode !== 'managed' ? (
+          <ChatComposer
           pendingPermissionRequests={pendingPermissionRequests}
           handlePermissionDecision={handlePermissionDecision}
           handleGrantToolPermission={handleGrantToolPermission}
@@ -411,6 +433,11 @@ function ChatInterface({
           isTextareaExpanded={isTextareaExpanded}
           sendByCtrlEnter={sendByCtrlEnter}
         />
+        ) : (
+          <div className="flex items-center justify-center p-4 text-sm text-muted-foreground border-t">
+            此 session 不接受手动输入（worker 模式）
+          </div>
+        )}
       </div>
 
       <QuickSettingsPanel />

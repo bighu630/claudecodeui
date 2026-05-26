@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { PROJECT_ROLE_LABELS, PROJECT_ROLE_TYPES } from '../../project-role-config/roleModelConfig';
 import { isSshGitUrl } from '../utils/pathUtils';
 import type { WizardFormState } from '../types';
 
@@ -68,6 +69,23 @@ export default function StepReview({
               </div>
             </>
           )}
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-900/50">
+        <h4 className="mb-3 text-sm font-semibold text-gray-900 dark:text-white">
+          {t('projectWizard.roleModelConfig.reviewTitle', { defaultValue: 'Role model defaults' })}
+        </h4>
+
+        <div className="space-y-2">
+          {PROJECT_ROLE_TYPES.map((role) => (
+            <div key={role} className="flex items-center justify-between gap-3 text-sm">
+              <span className="text-gray-600 dark:text-gray-400">{PROJECT_ROLE_LABELS[role]}</span>
+              <span className="text-right text-xs text-gray-900 dark:text-white">
+                {formState.roleModelConfig[role].provider} / {formState.roleModelConfig[role].model}
+              </span>
+            </div>
+          ))}
         </div>
       </div>
 

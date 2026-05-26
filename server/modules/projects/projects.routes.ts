@@ -1,6 +1,8 @@
 import express from 'express';
 
+import { projectsDb } from '@/modules/database/index.js';
 import { createProject, updateProjectDisplayName } from '@/modules/projects/services/project-management.service.js';
+import { normalizeProjectRoleModelConfig } from '@/modules/projects/project-role-config.js';
 import { startCloneProject } from '@/modules/projects/services/project-clone.service.js';
 import { getProjectTaskMaster } from '@/modules/projects/services/projects-has-taskmaster.service.js';
 import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils.js';
@@ -65,6 +67,25 @@ function resolveRouteErrorMessage(error: unknown): string {
   return 'Failed to clone repository';
 }
 
+function parseRoleModelConfig(value: unknown): ReturnType<typeof normalizeProjectRoleModelConfig> {
+  if (typeof value === 'string') {
+    if (!value.trim()) {
+      return normalizeProjectRoleModelConfig(undefined);
+    }
+
+    try {
+      return normalizeProjectRoleModelConfig(JSON.parse(value));
+    } catch {
+      throw new AppError('roleModelConfig must be valid JSON', {
+        code: 'INVALID_ROLE_MODEL_CONFIG',
+        statusCode: 400,
+      });
+    }
+  }
+
+  return normalizeProjectRoleModelConfig(value);
+}
+
 router.get(
   '/',
   asyncHandler(async (_req, res) => {
@@ -98,6 +119,7 @@ router.post(
     const requestBody = req.body as Record<string, unknown>;
     const projectPath = typeof requestBody.path === 'string' ? requestBody.path : '';
     const customName = typeof requestBody.customName === 'string' ? requestBody.customName : null;
+    const roleModelConfig = parseRoleModelConfig(requestBody.roleModelConfig);
 
     if (requestBody.workspaceType !== undefined) {
       throw new AppError('workspaceType is no longer supported. Use the single create-project flow.', {
@@ -117,6 +139,7 @@ router.post(
     const projectCreationResult = await createProject({
       projectPath,
       customName,
+      roleModelConfig,
     });
 
     res.json({
@@ -170,6 +193,7 @@ router.get('/clone-progress', async (req, res) => {
     const githubUrl = readQueryStringValue(queryParams.githubUrl);
     const githubTokenId = readOptionalNumericQueryValue(queryParams.githubTokenId);
     const newGithubToken = readQueryStringValue(queryParams.newGithubToken) || null;
+    const roleModelConfig = parseRoleModelConfig(readQueryStringValue(queryParams.roleModelConfig));
 
     const authenticatedUser = (req as typeof req & { user?: AuthenticatedUser }).user;
     const userId = authenticatedUser?.id;
@@ -186,6 +210,7 @@ router.get('/clone-progress', async (req, res) => {
         githubUrl,
         githubTokenId,
         newGithubToken,
+        roleModelConfig,
         userId,
       },
       {
@@ -215,6 +240,39 @@ router.get(
     const projectId = typeof req.params.projectId === 'string' ? req.params.projectId : '';
     const taskMasterDetails = await getProjectTaskMaster(projectId);
     res.json(taskMasterDetails);
+  }),
+);
+
+router.get(
+  '/:projectId/role-model-config',
+  asyncHandler(async (req, res) => {
+    const projectId = typeof req.params.projectId === 'string' ? req.params.projectId : '';
+    res.json(createApiSuccessResponse({
+      projectId,
+      roleModelConfig: projectsDb.getProjectRoleModelConfig(projectId),
+    }));
+  }),
+);
+
+router.put(
+  '/:projectId/role-model-config',
+  asyncHandler(async (req, res) => {
+    const projectId = typeof req.params.projectId === 'string' ? req.params.projectId : '';
+    const requestBody = req.body as Record<string, unknown>;
+    const roleModelConfig = parseRoleModelConfig(requestBody.roleModelConfig);
+    const project = projectsDb.getProjectById(projectId);
+    if (!project) {
+      throw new AppError('Project not found', {
+        code: 'PROJECT_NOT_FOUND',
+        statusCode: 404,
+      });
+    }
+
+    const savedConfig = projectsDb.saveProjectRoleModelConfig(projectId, roleModelConfig);
+    res.json(createApiSuccessResponse({
+      projectId,
+      roleModelConfig: savedConfig,
+    }));
   }),
 );
 

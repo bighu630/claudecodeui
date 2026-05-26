@@ -1,5 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { Input } from '../../../shared/view/ui';
+import type { ProjectRoleModelConfig } from '../../../types/app';
+import ProjectRoleModelConfigEditor from '../../project-role-config/ProjectRoleModelConfigEditor';
 import { shouldShowGithubAuthentication } from '../utils/pathUtils';
 import type { GithubTokenCredential, TokenMode } from '../types';
 import GithubAuthenticationCard from './GithubAuthenticationCard';
@@ -11,6 +13,7 @@ type StepConfigurationProps = {
   tokenMode: TokenMode;
   selectedGithubToken: string;
   newGithubToken: string;
+  roleModelConfig: ProjectRoleModelConfig;
   availableTokens: GithubTokenCredential[];
   loadingTokens: boolean;
   tokenLoadError: string | null;
@@ -20,6 +23,7 @@ type StepConfigurationProps = {
   onTokenModeChange: (tokenMode: TokenMode) => void;
   onSelectedGithubTokenChange: (tokenId: string) => void;
   onNewGithubTokenChange: (tokenValue: string) => void;
+  onRoleModelConfigChange: (roleModelConfig: ProjectRoleModelConfig) => void;
   onAdvanceToConfirm: () => void;
 };
 
@@ -29,6 +33,7 @@ export default function StepConfiguration({
   tokenMode,
   selectedGithubToken,
   newGithubToken,
+  roleModelConfig,
   availableTokens,
   loadingTokens,
   tokenLoadError,
@@ -38,6 +43,7 @@ export default function StepConfiguration({
   onTokenModeChange,
   onSelectedGithubTokenChange,
   onNewGithubTokenChange,
+  onRoleModelConfigChange,
   onAdvanceToConfirm,
 }: StepConfigurationProps) {
   const { t } = useTranslation();
@@ -92,6 +98,16 @@ export default function StepConfiguration({
           onNewGithubTokenChange={onNewGithubTokenChange}
         />
       )}
+
+      <ProjectRoleModelConfigEditor
+        value={roleModelConfig}
+        onChange={onRoleModelConfigChange}
+        disabled={isCreating}
+        title={t('projectWizard.roleModelConfig.title', { defaultValue: 'Role Model Settings' })}
+        description={t('projectWizard.roleModelConfig.description', {
+          defaultValue: 'These defaults apply to future sessions created under this project.',
+        })}
+      />
     </div>
   );
 }

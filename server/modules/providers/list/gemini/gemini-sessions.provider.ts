@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import readline from 'node:readline';
 
 import { sessionsDb } from '@/modules/database/index.js';
+import { extractVisibleOrchestratorUserMessage } from '@/modules/orchestrator/index.js';
 import type { IProviderSessions } from '@/shared/interfaces.js';
 import type { AnyRecord, FetchHistoryOptions, FetchHistoryResult, NormalizedMessage } from '@/shared/types.js';
 import { createNormalizedMessage, generateMessageId, readObjectRecord } from '@/shared/utils.js';
@@ -28,7 +29,8 @@ function mapGeminiRole(value: unknown): 'user' | 'assistant' | null {
 
 function extractGeminiTextContent(content: unknown): string {
   if (typeof content === 'string') {
-    return content;
+    const visibleOrchestratorText = extractVisibleOrchestratorUserMessage(content);
+    return visibleOrchestratorText !== null ? visibleOrchestratorText : content;
   }
 
   if (!Array.isArray(content)) {
@@ -38,7 +40,8 @@ function extractGeminiTextContent(content: unknown): string {
   return content
     .map((part) => {
       if (typeof part === 'string') {
-        return part;
+        const visibleOrchestratorText = extractVisibleOrchestratorUserMessage(part);
+        return visibleOrchestratorText !== null ? visibleOrchestratorText : part;
       }
       if (!part || typeof part !== 'object') {
         return '';
@@ -46,7 +49,8 @@ function extractGeminiTextContent(content: unknown): string {
 
       const record = part as AnyRecord;
       if (typeof record.text === 'string') {
-        return record.text;
+        const visibleOrchestratorText = extractVisibleOrchestratorUserMessage(record.text);
+        return visibleOrchestratorText !== null ? visibleOrchestratorText : record.text;
       }
 
       return '';

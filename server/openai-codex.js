@@ -14,9 +14,16 @@
  */
 
 import { Codex } from '@openai/codex-sdk';
+
 import { notifyRunFailed, notifyRunStopped } from './services/notification-orchestrator.js';
-import { sessionsService } from './modules/providers/services/sessions.service.js';
-import { providerAuthService } from './modules/providers/services/provider-auth.service.js';
+import {
+  bindChildRuntimeFromTool,
+  bindExternalSessionId,
+  finalizeOrchestratorRun,
+  materializeAndBindChildSessionFromTool,
+  prepareOrchestratorCommand,
+} from './modules/orchestrator/index.js';
+import { providerAuthService, sessionsService } from './modules/providers/index.js';
 import { createNormalizedMessage } from './shared/utils.js';
 
 // Track active sessions
@@ -212,6 +219,10 @@ export async function queryCodex(command, options = {}, ws) {
   let terminalFailure = null;
   const abortController = new AbortController();
 
+  if (options.orchestratorSessionId && capturedSessionId) {
+    bindExternalSessionId(options.orchestratorSessionId, capturedSessionId);
+  }
+
   try {
     // Initialize Codex SDK
     codex = new Codex();
@@ -250,8 +261,13 @@ export async function queryCodex(command, options = {}, ws) {
       registerSession(capturedSessionId);
     }
 
+    // ── Orchestrator: inject session context only on first provider-thread startup ──
+    const resolvedCommand = options.orchestratorSessionId
+      ? prepareOrchestratorCommand(options.orchestratorSessionId, command)
+      : command;
+
     // Execute with streaming
-    const streamedTurn = await thread.runStreamed(command, {
+    const streamedTurn = await thread.runStreamed(resolvedCommand, {
       signal: abortController.signal
     });
 
@@ -259,6 +275,9 @@ export async function queryCodex(command, options = {}, ws) {
       // Capture thread/session id lazily from the stream (Codex emits this asynchronously).
       if (event.type === 'thread.started') {
         const discoveredSessionId = event.thread_id || event.id || null;
+        if (discoveredSessionId && options.orchestratorSessionId) {
+          bindExternalSessionId(options.orchestratorSessionId, discoveredSessionId);
+        }
         if (discoveredSessionId && !capturedSessionId) {
           capturedSessionId = discoveredSessionId;
           registerSession(capturedSessionId);
@@ -294,6 +313,26 @@ export async function queryCodex(command, options = {}, ws) {
       // Normalize the transformed event into NormalizedMessage(s) via adapter
       const normalizedMsgs = sessionsService.normalizeMessage('codex', transformed, capturedSessionId || sessionId || null);
       for (const msg of normalizedMsgs) {
+        if (options.orchestratorSessionId && msg.kind === 'tool_use') {
+          materializeAndBindChildSessionFromTool(options.orchestratorSessionId, {
+            toolName: msg.toolName,
+            toolInput: msg.toolInput,
+            toolId: msg.toolId,
+            runtimeInfo:
+              msg.toolUseResult ||
+              msg.toolResult?.toolUseResult ||
+              msg.result ||
+              transformed.result ||
+              transformed.item?.result ||
+              null,
+          });
+        }
+        if (options.orchestratorSessionId && msg.kind === 'tool_result') {
+          bindChildRuntimeFromTool(options.orchestratorSessionId, {
+            toolId: msg.toolId,
+            runtimeInfo: msg.toolUseResult || msg.toolResult?.toolUseResult || transformed,
+          });
+        }
         sendMessage(ws, msg);
       }
 
@@ -330,6 +369,13 @@ export async function queryCodex(command, options = {}, ws) {
         sessionName: sessionSummary,
         stopReason: 'completed'
       });
+
+      if (options.orchestratorSessionId) {
+        finalizeOrchestratorRun(options.orchestratorSessionId, {
+          success: true,
+          runSummary: 'Run completed',
+        });
+      }
     }
 
   } catch (error) {
@@ -341,6 +387,13 @@ export async function queryCodex(command, options = {}, ws) {
 
     if (!wasAborted) {
       console.error('[Codex] Error:', error);
+
+      if (options.orchestratorSessionId) {
+        finalizeOrchestratorRun(options.orchestratorSessionId, {
+          success: false,
+          errorSummary: error?.message ?? 'Unknown error',
+        });
+      }
 
       // Check if Codex SDK is available for a clearer error message
       const installed = await providerAuthService.isProviderInstalled('codex');

@@ -1,12 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { NavigateFunction } from 'react-router-dom';
 
-import { api } from '../utils/api';
+import { api, authenticatedFetch } from '../utils/api';
+import {
+  getSessionRouteId,
+  getSessionRuntimeId,
+  isOrchestratorSession,
+  normalizeOrchestratorSession,
+} from '../utils/sessionIdentity';
 import type {
   AppSocketMessage,
   AppTab,
   LLMProvider,
   LoadingProgress,
+  OrchestratorSession,
   Project,
   ProjectSession,
   ProjectsUpdatedMessage,
@@ -191,6 +198,10 @@ const isUpdateAdditive = (
     return true;
   }
 
+  if (isOrchestratorSession(selectedSession)) {
+    return true;
+  }
+
   const currentSelectedProject = currentProjects.find((project) => project.projectId === selectedProject.projectId);
   const updatedSelectedProject = updatedProjects.find((project) => project.projectId === selectedProject.projectId);
 
@@ -217,7 +228,7 @@ const isUpdateAdditive = (
   );
 };
 
-const VALID_TABS: Set<string> = new Set(['chat', 'files', 'shell', 'git', 'tasks', 'preview']);
+const VALID_TABS: Set<string> = new Set(['chat', 'files', 'shell', 'git', 'tasks', 'preview', 'session-panel']);
 
 const isValidTab = (tab: string): tab is AppTab => {
   return VALID_TABS.has(tab) || tab.startsWith('plugin:');
@@ -425,8 +436,13 @@ export function useProjectsState({
 
     const projectsMessage = latestMessage as ProjectsUpdatedMessage;
 
+    const selectedRuntimeSessionId = getSessionRuntimeId(selectedSession);
+
     if (projectsMessage.updatedSessionId && selectedSession && selectedProject) {
-      if (projectsMessage.updatedSessionId === selectedSession.id) {
+      if (
+        projectsMessage.updatedSessionId === selectedSession.id
+        || projectsMessage.updatedSessionId === selectedRuntimeSessionId
+      ) {
         const isSessionActive = activeSessions.has(selectedSession.id);
 
         if (!isSessionActive) {
@@ -471,12 +487,14 @@ export function useProjectsState({
       return;
     }
 
-    const updatedSelectedSession = getProjectSessions(updatedSelectedProject).find(
-      (session) => session.id === selectedSession.id,
-    );
+    if (!isOrchestratorSession(selectedSession)) {
+      const updatedSelectedSession = getProjectSessions(updatedSelectedProject).find(
+        (session) => session.id === selectedSession.id,
+      );
 
-    if (!updatedSelectedSession) {
-      setSelectedSession(null);
+      if (!updatedSelectedSession) {
+        setSelectedSession(null);
+      }
     }
   }, [latestMessage, selectedProject, selectedSession, activeSessions, projects]);
 
@@ -494,104 +512,139 @@ export function useProjectsState({
       return;
     }
 
-    // Project membership is resolved through `projectId` after the migration.
-    for (const project of projects) {
-      const claudeSession = project.sessions?.find((session) => session.id === sessionId);
-      if (claudeSession) {
-        const shouldUpdateProject = selectedProject?.projectId !== project.projectId;
-        const shouldUpdateSession =
-          selectedSession?.id !== sessionId || selectedSession.__provider !== 'claude';
+    let cancelled = false;
+    let resolvedRouteSession = false;
 
-        if (shouldUpdateProject) {
-          setSelectedProject(project);
-        }
-        if (shouldUpdateSession) {
-          setSelectedSession({ ...claudeSession, __provider: 'claude' });
-        }
+    const clearInvalidRouteSession = () => {
+      if (cancelled) {
         return;
       }
 
-      const cursorSession = project.cursorSessions?.find((session) => session.id === sessionId);
-      if (cursorSession) {
-        const shouldUpdateProject = selectedProject?.projectId !== project.projectId;
-        const shouldUpdateSession =
-          selectedSession?.id !== sessionId || selectedSession.__provider !== 'cursor';
-
-        if (shouldUpdateProject) {
-          setSelectedProject(project);
-        }
-        if (shouldUpdateSession) {
-          setSelectedSession({ ...cursorSession, __provider: 'cursor' });
-        }
-        return;
+      if (selectedSession?.id === sessionId) {
+        setSelectedSession(null);
       }
 
-      const codexSession = project.codexSessions?.find((session) => session.id === sessionId);
-      if (codexSession) {
-        const shouldUpdateProject = selectedProject?.projectId !== project.projectId;
-        const shouldUpdateSession =
-          selectedSession?.id !== sessionId || selectedSession.__provider !== 'codex';
+      navigate('/');
+    };
 
-        if (shouldUpdateProject) {
-          setSelectedProject(project);
+    void (async () => {
+      try {
+        const orchestratorRuntimeResponse = await authenticatedFetch(`/api/orchestrator/runtime/${encodeURIComponent(sessionId)}`);
+        if (orchestratorRuntimeResponse.ok) {
+          const payload = (await orchestratorRuntimeResponse.json()) as { session?: OrchestratorSession };
+          const routeSession = payload.session;
+          if (!routeSession || cancelled) {
+            return;
+          }
+
+          const routeProject = projects.find((project) => project.projectId === routeSession.project_id);
+          if (!routeProject) {
+            return;
+          }
+
+          if (selectedProject?.projectId !== routeProject.projectId) {
+            setSelectedProject(routeProject);
+          }
+
+          const normalizedSession = normalizeOrchestratorSession(routeSession, routeProject.projectId);
+          if (serialize(normalizedSession) !== serialize(selectedSession)) {
+            setSelectedSession(normalizedSession);
+          }
+          resolvedRouteSession = true;
+          return;
         }
-        if (shouldUpdateSession) {
-          setSelectedSession({ ...codexSession, __provider: 'codex' });
+
+        // Project membership is resolved through `projectId` after the migration.
+        for (const project of projects) {
+          const claudeSession = project.sessions?.find((session) => session.id === sessionId);
+          if (claudeSession) {
+            if (selectedProject?.projectId !== project.projectId) {
+              setSelectedProject(project);
+            }
+            if (selectedSession?.id !== sessionId || selectedSession.__provider !== 'claude') {
+              setSelectedSession({ ...claudeSession, __provider: 'claude' });
+            }
+            resolvedRouteSession = true;
+            return;
+          }
+
+          const cursorSession = project.cursorSessions?.find((session) => session.id === sessionId);
+          if (cursorSession) {
+            if (selectedProject?.projectId !== project.projectId) {
+              setSelectedProject(project);
+            }
+            if (selectedSession?.id !== sessionId || selectedSession.__provider !== 'cursor') {
+              setSelectedSession({ ...cursorSession, __provider: 'cursor' });
+            }
+            resolvedRouteSession = true;
+            return;
+          }
+
+          const codexSession = project.codexSessions?.find((session) => session.id === sessionId);
+          if (codexSession) {
+            if (selectedProject?.projectId !== project.projectId) {
+              setSelectedProject(project);
+            }
+            if (selectedSession?.id !== sessionId || selectedSession.__provider !== 'codex') {
+              setSelectedSession({ ...codexSession, __provider: 'codex' });
+            }
+            resolvedRouteSession = true;
+            return;
+          }
+
+          const geminiSession = project.geminiSessions?.find((session) => session.id === sessionId);
+          if (geminiSession) {
+            if (selectedProject?.projectId !== project.projectId) {
+              setSelectedProject(project);
+            }
+            if (selectedSession?.id !== sessionId || selectedSession.__provider !== 'gemini') {
+              setSelectedSession({ ...geminiSession, __provider: 'gemini' });
+            }
+            resolvedRouteSession = true;
+            return;
+          }
         }
-        return;
+
+        const response = await authenticatedFetch(`/api/orchestrator/sessions/${encodeURIComponent(sessionId)}`);
+        if (!response.ok) {
+          console.warn('Ignoring unknown session route that is not backed by project data:', sessionId);
+          clearInvalidRouteSession();
+          return;
+        }
+
+        const payload = (await response.json()) as { session?: OrchestratorSession };
+        const routeSession = payload.session;
+        if (!routeSession || cancelled) {
+          console.warn('Ignoring missing orchestrator session route:', sessionId);
+          clearInvalidRouteSession();
+          return;
+        }
+        const routeProject = projects.find((project) => project.projectId === routeSession.project_id);
+        if (!routeProject) {
+          console.warn('Ignoring session route for unknown project:', sessionId, routeSession.project_id);
+          clearInvalidRouteSession();
+          return;
+        }
+        if (selectedProject?.projectId !== routeProject.projectId) {
+          setSelectedProject(routeProject);
+        }
+        const normalizedSession = normalizeOrchestratorSession(routeSession, routeProject.projectId);
+        if (serialize(normalizedSession) !== serialize(selectedSession)) {
+          setSelectedSession(normalizedSession);
+        }
+        resolvedRouteSession = true;
+      } catch (error) {
+        console.error('Error resolving orchestrator route session:', error);
+        if (!resolvedRouteSession) {
+          clearInvalidRouteSession();
+        }
       }
+    })();
 
-      const geminiSession = project.geminiSessions?.find((session) => session.id === sessionId);
-      if (geminiSession) {
-        const shouldUpdateProject = selectedProject?.projectId !== project.projectId;
-        const shouldUpdateSession =
-          selectedSession?.id !== sessionId || selectedSession.__provider !== 'gemini';
-
-        if (shouldUpdateProject) {
-          setSelectedProject(project);
-        }
-        if (shouldUpdateSession) {
-          setSelectedSession({ ...geminiSession, __provider: 'gemini' });
-        }
-        return;
-      }
-    }
-
-    // Session id is in the URL but not yet present on any project payload (common
-    // right after `session_created` + navigate, before the next projects refresh).
-    // Without a `selectedSession`, chat state clears `currentSessionId` and the
-    // UI stops reading the session store even though messages stream under this id.
-    if (selectedSession?.id === sessionId) {
-      return;
-    }
-
-    if (!selectedProject) {
-      return;
-    }
-
-    let providerFromStorage: string | null = null;
-    try {
-      providerFromStorage = localStorage.getItem('selected-provider');
-    } catch {
-      providerFromStorage = null;
-    }
-
-    const normalizedProvider: LLMProvider =
-      providerFromStorage === 'cursor'
-        ? 'cursor'
-        : providerFromStorage === 'codex'
-          ? 'codex'
-          : providerFromStorage === 'gemini'
-            ? 'gemini'
-            : 'claude';
-
-    setSelectedSession({
-      id: sessionId,
-      __provider: normalizedProvider,
-      __projectId: selectedProject.projectId,
-      summary: '',
-    });
-  }, [sessionId, projects, selectedProject, selectedSession?.id, selectedSession?.__provider]);
+    return () => {
+      cancelled = true;
+    };
+  }, [navigate, sessionId, projects, selectedProject, selectedSession]);
 
   const handleProjectSelect = useCallback(
     (project: Project) => {
@@ -608,23 +661,30 @@ export function useProjectsState({
 
   const handleSessionSelect = useCallback(
     (session: ProjectSession) => {
-      setSelectedSession(session);
+      const normalizedSession = isOrchestratorSession(session)
+        ? normalizeOrchestratorSession(session, session.__projectId || selectedProject?.projectId || '')
+        : session;
+
+      setSelectedSession(normalizedSession);
 
       if (activeTab === 'tasks' || activeTab === 'preview') {
         setActiveTab('chat');
       }
 
       const provider = localStorage.getItem('selected-provider') || 'claude';
-      if (provider === 'cursor') {
-        sessionStorage.setItem('cursorSessionId', session.id);
+      const sessionProvider =
+        normalizedSession.__provider
+          || ((normalizedSession as Partial<OrchestratorSession>).provider as LLMProvider | undefined)
+          || provider;
+      if (sessionProvider === 'cursor') {
+        const providerSessionId = getSessionRuntimeId(normalizedSession) || '';
+        if (providerSessionId) {
+          sessionStorage.setItem('cursorSessionId', providerSessionId);
+        }
       }
 
       if (isMobile) {
-        // Sessions are tagged with the owning project's DB `projectId` when
-        // picked from the sidebar (see useSidebarController); compare against
-        // the current selection's `projectId` so we know whether to collapse
-        // the sidebar after navigation.
-        const sessionProjectId = session.__projectId;
+        const sessionProjectId = normalizedSession.__projectId;
         const currentProjectId = selectedProject?.projectId;
 
         if (sessionProjectId !== currentProjectId) {
@@ -632,7 +692,12 @@ export function useProjectsState({
         }
       }
 
-      navigate(`/session/${session.id}`);
+      const routeSessionId = getSessionRouteId(normalizedSession);
+      if (routeSessionId) {
+        navigate(`/session/${routeSessionId}`);
+      } else {
+        navigate('/');
+      }
     },
     [activeTab, isMobile, navigate, selectedProject?.projectId],
   );
@@ -727,19 +792,20 @@ export function useProjectsState({
         return;
       }
 
-      const refreshedSession = getProjectSessions(refreshedProject).find(
-        (session) => session.id === selectedSession.id,
-      );
+      if (!isOrchestratorSession(selectedSession)) {
+        const refreshedSession = getProjectSessions(refreshedProject).find(
+          (session) => session.id === selectedSession.id,
+        );
 
-      if (refreshedSession) {
-        // Keep provider metadata stable when refreshed payload doesn't include __provider.
-        const normalizedRefreshedSession =
-          refreshedSession.__provider || !selectedSession.__provider
-            ? refreshedSession
-            : { ...refreshedSession, __provider: selectedSession.__provider };
+        if (refreshedSession) {
+          const normalizedRefreshedSession =
+            refreshedSession.__provider || !selectedSession.__provider
+              ? refreshedSession
+              : { ...refreshedSession, __provider: selectedSession.__provider };
 
-        if (serialize(normalizedRefreshedSession) !== serialize(selectedSession)) {
-          setSelectedSession(normalizedRefreshedSession);
+          if (serialize(normalizedRefreshedSession) !== serialize(selectedSession)) {
+            setSelectedSession(normalizedRefreshedSession);
+          }
         }
       }
     } catch (error) {
@@ -824,6 +890,7 @@ export function useProjectsState({
       onProjectDelete: handleProjectDelete,
       isLoading: isLoadingProjects,
       loadingProgress,
+      latestMessage,
       onRefresh: handleSidebarRefresh,
       onShowSettings: () => setShowSettings(true),
       showSettings,
@@ -841,6 +908,7 @@ export function useProjectsState({
       handleSidebarRefresh,
       isLoadingProjects,
       isMobile,
+      latestMessage,
       loadingProgress,
       projects,
       settingsInitialTab,

@@ -79,6 +79,13 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ displayName }),
     }),
+  getProjectRoleModelConfig: (projectId) =>
+    authenticatedFetch(`/api/projects/${encodeURIComponent(projectId)}/role-model-config`),
+  updateProjectRoleModelConfig: (projectId, roleModelConfig) =>
+    authenticatedFetch(`/api/projects/${encodeURIComponent(projectId)}/role-model-config`, {
+      method: 'PUT',
+      body: JSON.stringify({ roleModelConfig }),
+    }),
   restoreProject: (projectId) =>
     authenticatedFetch(`/api/projects/${encodeURIComponent(projectId)}/restore`, {
       method: 'POST',

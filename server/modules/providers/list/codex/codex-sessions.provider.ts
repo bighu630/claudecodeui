@@ -2,6 +2,7 @@ import fsSync from 'node:fs';
 import readline from 'node:readline';
 
 import { sessionsDb } from '@/modules/database/index.js';
+import { extractVisibleOrchestratorUserMessage } from '@/modules/orchestrator/index.js';
 import type { IProviderSessions } from '@/shared/interfaces.js';
 import type { AnyRecord, FetchHistoryOptions, FetchHistoryResult, NormalizedMessage } from '@/shared/types.js';
 import { createNormalizedMessage, generateMessageId, readObjectRecord } from '@/shared/utils.js';
@@ -29,6 +30,11 @@ function isVisibleCodexUserMessage(payload: AnyRecord | null | undefined): boole
   }
 
   return typeof payload.message === 'string' && payload.message.trim().length > 0;
+}
+
+function getVisibleCodexUserMessage(value: string): string {
+  const visibleOrchestratorText = extractVisibleOrchestratorUserMessage(value);
+  return visibleOrchestratorText !== null ? visibleOrchestratorText : value;
 }
 
 function extractCodexTextContent(content: unknown): string {
@@ -97,12 +103,16 @@ async function getCodexSessionMessages(
         }
 
         if (entry.type === 'event_msg' && isVisibleCodexUserMessage(entry.payload as AnyRecord)) {
+          const visibleMessage = getVisibleCodexUserMessage(String(entry.payload.message || ''));
+          if (!visibleMessage.trim()) {
+            continue;
+          }
           messages.push({
             type: 'user',
             timestamp: entry.timestamp,
             message: {
               role: 'user',
-              content: entry.payload.message,
+              content: visibleMessage,
             },
           });
         }
@@ -289,10 +299,15 @@ export class CodexSessionsProvider implements IProviderSessions {
 
     if (raw.message?.role === 'user') {
       const content = typeof raw.message.content === 'string'
-        ? raw.message.content
+        ? getVisibleCodexUserMessage(raw.message.content)
         : Array.isArray(raw.message.content)
           ? raw.message.content
-              .map((part: string | AnyRecord) => typeof part === 'string' ? part : part?.text || '')
+              .map((part: string | AnyRecord) => {
+                if (typeof part === 'string') {
+                  return getVisibleCodexUserMessage(part);
+                }
+                return typeof part?.text === 'string' ? getVisibleCodexUserMessage(part.text) : '';
+              })
               .filter(Boolean)
               .join('\n')
           : String(raw.message.content || '');

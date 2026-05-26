@@ -11,6 +11,7 @@ import type { InstallMode } from '../../../../hooks/useVersionCheck';
 import { normalizeProjectForSettings } from '../../utils/utils';
 import type { DeleteProjectConfirmation, SessionDeleteConfirmation, SettingsProject } from '../../types/types';
 import ProjectCreationWizard from '../../../project-creation-wizard';
+import ProjectRoleModelSettingsModal from './ProjectRoleModelSettingsModal';
 
 type SidebarModalsProps = {
   projects: Project[];
@@ -20,6 +21,9 @@ type SidebarModalsProps = {
   showNewProject: boolean;
   onCloseNewProject: () => void;
   onProjectCreated: () => void;
+  projectRoleSettingsTarget: Project | null;
+  onCloseProjectRoleSettings: () => void;
+  onProjectRoleSettingsSaved: () => Promise<void> | void;
   deleteConfirmation: DeleteProjectConfirmation | null;
   onCancelDeleteProject: () => void;
   onConfirmDeleteProject: (deleteData?: boolean) => void;
@@ -56,6 +60,9 @@ export default function SidebarModals({
   showNewProject,
   onCloseNewProject,
   onProjectCreated,
+  projectRoleSettingsTarget,
+  onCloseProjectRoleSettings,
+  onProjectRoleSettingsSaved,
   deleteConfirmation,
   onCancelDeleteProject,
   onConfirmDeleteProject,
@@ -94,6 +101,16 @@ export default function SidebarModals({
             onClose={onCloseSettings}
             projects={settingsProjects}
             initialTab={settingsInitialTab}
+          />,
+          document.body,
+        )}
+
+      {projectRoleSettingsTarget &&
+        ReactDOM.createPortal(
+          <ProjectRoleModelSettingsModal
+            project={projectRoleSettingsTarget}
+            onClose={onCloseProjectRoleSettings}
+            onSaved={onProjectRoleSettingsSaved}
           />,
           document.body,
         )}

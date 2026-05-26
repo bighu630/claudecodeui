@@ -3,6 +3,7 @@ import { authenticatedFetch } from '../../../utils/api';
 import { CLAUDE_MODELS, CODEX_MODELS, CURSOR_MODELS, GEMINI_MODELS } from '../../../../shared/modelConstants';
 import type { PendingPermissionRequest, PermissionMode } from '../types/types';
 import type { ProjectSession, LLMProvider } from '../../../types/app';
+import { resolveSessionModel, resolveSessionProvider } from '../utils/orchestratorSessionConfig';
 
 const getPermissionModesForProvider = (provider: LLMProvider): PermissionMode[] => {
   if (provider === 'codex') {
@@ -50,12 +51,46 @@ export function useChatProviderState({ selectedSession }: UseChatProviderStateAr
   }, [selectedSession?.id, provider]);
 
   useEffect(() => {
-    if (!selectedSession?.__provider || selectedSession.__provider === provider) {
+    const resolvedProvider = resolveSessionProvider(selectedSession, provider);
+    if (resolvedProvider === provider) {
       return;
     }
 
-    setProvider(selectedSession.__provider);
-    localStorage.setItem('selected-provider', selectedSession.__provider);
+    setProvider(resolvedProvider);
+    localStorage.setItem('selected-provider', resolvedProvider);
+  }, [
+    claudeModel,
+    codexModel,
+    cursorModel,
+    geminiModel,
+    provider,
+    selectedSession,
+  ]);
+
+  useEffect(() => {
+    const resolvedProvider = resolveSessionProvider(selectedSession, provider);
+    const resolvedModel = resolveSessionModel(selectedSession, resolvedProvider, {
+      claudeModel,
+      cursorModel,
+      codexModel,
+      geminiModel,
+    });
+
+    if (resolvedProvider === 'claude' && resolvedModel !== claudeModel) {
+      setClaudeModel(resolvedModel);
+      return;
+    }
+    if (resolvedProvider === 'cursor' && resolvedModel !== cursorModel) {
+      setCursorModel(resolvedModel);
+      return;
+    }
+    if (resolvedProvider === 'codex' && resolvedModel !== codexModel) {
+      setCodexModel(resolvedModel);
+      return;
+    }
+    if (resolvedProvider === 'gemini' && resolvedModel !== geminiModel) {
+      setGeminiModel(resolvedModel);
+    }
   }, [provider, selectedSession]);
 
   useEffect(() => {

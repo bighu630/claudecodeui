@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { getDefaultProjectRoleModelConfig } from '@/modules/projects/project-role-config.js';
 import { createProject } from '@/modules/projects/services/project-management.service.js';
 import { AppError } from '@/shared/utils.js';
 
@@ -10,6 +11,14 @@ const projectRow = {
   custom_project_name: 'my-project',
   isStarred: 0,
   isArchived: 0,
+};
+
+const defaultRoleModelConfig = getDefaultProjectRoleModelConfig();
+
+const roleModelConfigDeps = {
+  persistProjectRoleModelConfig: () => defaultRoleModelConfig,
+  getProjectRoleModelConfig: () => defaultRoleModelConfig,
+  bootstrapOrchestrator: () => undefined,
 };
 
 test('createProject throws when project path is missing', async () => {
@@ -33,6 +42,7 @@ test('createProject throws when path validation fails', async () => {
           validatePath: async () => ({ valid: false, error: 'blocked path' }),
           ensureWorkspaceDirectory: async () => undefined,
           persistProjectPath: () => ({ outcome: 'created', project: projectRow }),
+          ...roleModelConfigDeps,
           getProjectByPath: () => projectRow,
         },
       ),
@@ -55,6 +65,7 @@ test('createProject throws conflict when active project path already exists', as
           validatePath: async () => ({ valid: true, resolvedPath: '/workspace/my-project' }),
           ensureWorkspaceDirectory: async () => undefined,
           persistProjectPath: () => ({ outcome: 'active_conflict', project: projectRow }),
+          ...roleModelConfigDeps,
           getProjectByPath: () => projectRow,
         },
       ),
@@ -86,6 +97,7 @@ test('createProject falls back to directory name when custom name is not provide
           },
         };
       },
+      ...roleModelConfigDeps,
       getProjectByPath: () => projectRow,
     },
   );
@@ -108,10 +120,38 @@ test('createProject returns archived reuse outcome when archived row is reused',
           isArchived: 1,
         },
       }),
+      ...roleModelConfigDeps,
       getProjectByPath: () => projectRow,
     },
   );
 
   assert.equal(result.outcome, 'reactivated_archived');
   assert.equal(result.project.isArchived, true);
+});
+
+test('createProject bootstraps orchestrator with the resolved project id and path', async () => {
+  let capturedBootstrapParams: { projectId: string; workspacePath: string } | null = null;
+
+  await createProject(
+    { projectPath: '/workspace/my-project' },
+    {
+      validatePath: async () => ({ valid: true, resolvedPath: '/workspace/my-project' }),
+      ensureWorkspaceDirectory: async () => undefined,
+      persistProjectPath: () => ({
+        outcome: 'created',
+        project: projectRow,
+      }),
+      persistProjectRoleModelConfig: () => defaultRoleModelConfig,
+      getProjectRoleModelConfig: () => defaultRoleModelConfig,
+      getProjectByPath: () => projectRow,
+      bootstrapOrchestrator: (params) => {
+        capturedBootstrapParams = params;
+      },
+    },
+  );
+
+  assert.deepEqual(capturedBootstrapParams, {
+    projectId: 'project-1',
+    workspacePath: '/workspace/my-project',
+  });
 });

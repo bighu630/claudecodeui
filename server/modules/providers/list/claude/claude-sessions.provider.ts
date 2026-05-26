@@ -7,6 +7,7 @@ import type { IProviderSessions } from '@/shared/interfaces.js';
 import type { AnyRecord, FetchHistoryOptions, FetchHistoryResult, NormalizedMessage } from '@/shared/types.js';
 import { createNormalizedMessage, generateMessageId, readObjectRecord } from '@/shared/utils.js';
 import { sessionsDb } from '@/modules/database/index.js';
+import { extractVisibleOrchestratorUserMessage } from '@/modules/orchestrator/index.js';
 
 const PROVIDER = 'claude';
 
@@ -216,6 +217,10 @@ const INTERNAL_CONTENT_PREFIXES = [
 ] as const;
 
 function isInternalContent(content: string): boolean {
+  if (extractVisibleOrchestratorUserMessage(content) !== null) {
+    return false;
+  }
+
   return INTERNAL_CONTENT_PREFIXES.some((prefix) => content.startsWith(prefix));
 }
 
@@ -326,7 +331,9 @@ export class ClaudeSessionsProvider implements IProviderSessions {
               toolUseResult: raw.toolUseResult,
             }));
           } else if (part.type === 'text') {
-            const text = part.text || '';
+            const rawText = part.text || '';
+            const visibleText = extractVisibleOrchestratorUserMessage(rawText);
+            const text = visibleText !== null ? visibleText : rawText;
             if (text && !isInternalContent(text)) {
               messages.push(createNormalizedMessage({
                 id: `${baseId}_text_${partIndex}`,
@@ -360,7 +367,8 @@ export class ClaudeSessionsProvider implements IProviderSessions {
           }
         }
       } else if (typeof raw.message.content === 'string') {
-        const text = raw.message.content;
+        const visibleText = extractVisibleOrchestratorUserMessage(raw.message.content);
+        const text = visibleText !== null ? visibleText : raw.message.content;
 
         /**
          * Claude stores compact summaries as synthetic "user" rows so the CLI

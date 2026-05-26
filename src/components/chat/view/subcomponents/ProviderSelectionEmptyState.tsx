@@ -11,7 +11,9 @@ import {
   GEMINI_MODELS,
   PROVIDERS,
 } from "../../../../../shared/modelConstants";
+import { authenticatedFetch } from "../../../../utils/api";
 import type { ProjectSession, LLMProvider } from "../../../../types/app";
+import { getSessionOrchestratorId, isOrchestratorSession } from "../../../../utils/sessionIdentity";
 import { NextTaskBanner } from "../../../task-master";
 import {
   Dialog,
@@ -108,9 +110,15 @@ export default function ProviderSelectionEmptyState({
   onShowAllTasks,
   setInput,
 }: ProviderSelectionEmptyStateProps) {
-  const { t } = useTranslation("chat");
-  const { isWindowsServer } = useServerPlatform();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [orchInitialized, setOrchInitialized] = useState(false);
+  const { t } = useTranslation();
+  const { isWindowsServer } = useServerPlatform();
+
+  // Reset orchInitialized when selectedSession changes
+  useEffect(() => {
+    setOrchInitialized(false);
+  }, [selectedSession?.id]);
 
   const visibleProviderGroups = useMemo(
     () => (isWindowsServer ? PROVIDER_GROUPS.filter((p) => p.id !== "cursor") : PROVIDER_GROUPS),
@@ -163,27 +171,54 @@ export default function ProviderSelectionEmptyState({
     [setClaudeModel, setCursorModel, setCodexModel, setGeminiModel],
   );
 
+  const isUninitializedOrch = Boolean(
+    selectedSession &&
+    isOrchestratorSession(selectedSession) &&
+    !selectedSession.provider,
+  );
+
   const handleModelSelect = useCallback(
     (providerId: LLMProvider, modelValue: string) => {
       setProvider(providerId);
       localStorage.setItem("selected-provider", providerId);
       setModelForProvider(providerId, modelValue);
       setDialogOpen(false);
+
+      if (isUninitializedOrch && selectedSession) {
+        const orchestratorSessionId = getSessionOrchestratorId(selectedSession);
+        if (!orchestratorSessionId) {
+          return;
+        }
+        authenticatedFetch(
+          `/api/orchestrator/sessions/${orchestratorSessionId}/initialize`,
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ provider: providerId, model: modelValue }),
+          },
+        ).catch(console.error);
+        setOrchInitialized(true);
+      }
+
       setTimeout(() => textareaRef.current?.focus(), 100);
     },
-    [setProvider, setModelForProvider, textareaRef],
+    [setProvider, setModelForProvider, textareaRef, isUninitializedOrch, selectedSession],
   );
 
-  if (!selectedSession && !currentSessionId) {
+  if (!orchInitialized && ((!selectedSession && !currentSessionId) || isUninitializedOrch)) {
     return (
       <div className="flex h-full items-center justify-center px-4">
         <div className="w-full max-w-md">
           <div className="mb-8 text-center">
             <h2 className="text-lg font-semibold tracking-tight text-foreground sm:text-xl">
-              {t("providerSelection.title")}
+              {isUninitializedOrch
+                ? `${(selectedSession as any).title}`
+                : t("providerSelection.title")}
             </h2>
             <p className="mt-1 text-[13px] text-muted-foreground">
-              {t("providerSelection.description")}
+              {isUninitializedOrch
+                ? "选择模型以初始化此 session"
+                : t("providerSelection.description")}
             </p>
           </div>
 

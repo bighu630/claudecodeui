@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useDeviceSettings } from '../../../hooks/useDeviceSettings';
@@ -33,6 +33,7 @@ function Sidebar({
   onProjectDelete,
   isLoading,
   loadingProgress,
+  latestMessage,
   onRefresh,
   onShowSettings,
   showSettings,
@@ -51,6 +52,7 @@ function Sidebar({
   const { setCurrentProject, mcpServerStatus } = useTaskMaster() as TaskMasterSidebarContext;
   const { tasksEnabled } = useTasksSettings();
   const paletteOps = usePaletteOps();
+  const [projectRoleSettingsTarget, setProjectRoleSettingsTarget] = useState<Project | null>(null);
 
   const {
     isSidebarCollapsed,
@@ -147,6 +149,7 @@ function Sidebar({
     selectedSession,
     isLoading,
     loadingProgress,
+    latestMessage,
     expandedProjects,
     editingProject,
     editingName,
@@ -165,6 +168,7 @@ function Sidebar({
     onProjectSelect: handleProjectSelect,
     onToggleStarProject: toggleStarProject,
     onStartEditingProject: startEditing,
+    onOpenProjectSettings: setProjectRoleSettingsTarget,
     onCancelEditingProject: cancelEditing,
     onSaveProjectName: (projectName) => {
       void saveProjectName(projectName);
@@ -199,6 +203,9 @@ function Sidebar({
         showNewProject={showNewProject}
         onCloseNewProject={() => setShowNewProject(false)}
         onProjectCreated={handleProjectCreated}
+        projectRoleSettingsTarget={projectRoleSettingsTarget}
+        onCloseProjectRoleSettings={() => setProjectRoleSettingsTarget(null)}
+        onProjectRoleSettingsSaved={handleProjectCreated}
         deleteConfirmation={deleteConfirmation}
         onCancelDeleteProject={() => setDeleteConfirmation(null)}
         onConfirmDeleteProject={confirmDeleteProject}

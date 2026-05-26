@@ -170,6 +170,12 @@ export default tseslint.config(
             "server/projects.js",
             "server/sessionManager.js",
             "server/utils/runtime-paths.js",
+            "server/claude-sdk.js",
+            "server/cursor-cli.js",
+            "server/openai-codex.js",
+            "server/gemini-cli.js",
+            "server/gemini-response-handler.js",
+            "server/services/notification-orchestrator.js",
           ], // provider history loading still resolves session data through these legacy runtime files
           mode: "file",
         },

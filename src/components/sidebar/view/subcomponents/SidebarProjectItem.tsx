@@ -1,9 +1,9 @@
-import { Check, ChevronDown, ChevronRight, Edit3, Folder, FolderOpen, Star, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Edit3, Folder, FolderOpen, Settings2, Star, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { Button } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
-import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
+import type { AppSocketMessage, Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { MCPServerStatus, SessionWithProvider } from '../../types/types';
 import { getTaskIndicatorStatus } from '../../utils/utils';
 
@@ -15,6 +15,7 @@ type SidebarProjectItemProps = {
   selectedProject: Project | null;
   selectedSession: ProjectSession | null;
   isExpanded: boolean;
+  latestMessage: AppSocketMessage | null;
   isDeleting: boolean;
   isStarred: boolean;
   editingProject: string | null;
@@ -32,6 +33,7 @@ type SidebarProjectItemProps = {
   onProjectSelect: (project: Project) => void;
   onToggleStarProject: (projectName: string) => void;
   onStartEditingProject: (project: Project) => void;
+  onOpenProjectSettings: (project: Project) => void;
   onCancelEditingProject: () => void;
   onSaveProjectName: (projectName: string) => void;
   onDeleteProject: (project: Project) => void;
@@ -61,6 +63,7 @@ export default function SidebarProjectItem({
   selectedProject,
   selectedSession,
   isExpanded,
+  latestMessage,
   isDeleting,
   isStarred,
   editingProject,
@@ -78,6 +81,7 @@ export default function SidebarProjectItem({
   onProjectSelect,
   onToggleStarProject,
   onStartEditingProject,
+  onOpenProjectSettings,
   onCancelEditingProject,
   onSaveProjectName,
   onDeleteProject,
@@ -236,6 +240,17 @@ export default function SidebarProjectItem({
                     </button>
 
                     <button
+                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 bg-gray-500/10 active:scale-90 dark:border-gray-700 dark:bg-gray-900/30"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onOpenProjectSettings(project);
+                      }}
+                      title={t('actions.settings', { defaultValue: 'Settings' })}
+                    >
+                      <Settings2 className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+                    </button>
+
+                    <button
                       className="flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-500/10 active:scale-90 dark:border-red-800 dark:bg-red-900/30"
                       onClick={(event) => {
                         event.stopPropagation();
@@ -383,6 +398,16 @@ export default function SidebarProjectItem({
                   <Edit3 className="h-3 w-3" />
                 </div>
                 <div
+                  className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-accent group-hover:opacity-100"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onOpenProjectSettings(project);
+                  }}
+                  title={t('actions.settings', { defaultValue: 'Settings' })}
+                >
+                  <Settings2 className="h-3 w-3" />
+                </div>
+                <div
                   className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-red-50 group-hover:opacity-100 dark:hover:bg-red-900/20"
                   onClick={(event) => {
                     event.stopPropagation();
@@ -406,6 +431,7 @@ export default function SidebarProjectItem({
       <SidebarProjectSessions
         project={project}
         isExpanded={isExpanded}
+        latestMessage={latestMessage}
         sessions={sessions}
         selectedSession={selectedSession}
         initialSessionsLoaded={initialSessionsLoaded}

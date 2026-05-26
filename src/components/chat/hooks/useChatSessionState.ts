@@ -4,8 +4,10 @@ import type { MutableRefObject } from 'react';
 import { authenticatedFetch } from '../../../utils/api';
 import type { Project, ProjectSession, LLMProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
+import { getSessionRuntimeId } from '../../../utils/sessionIdentity';
 import type { ChatMessage, Provider } from '../types/types';
 import { createCachedDiffCalculator, type DiffCalculator } from '../utils/messageTransforms';
+import { resolveSessionProvider } from '../utils/orchestratorSessionConfig';
 
 import { normalizedToChatMessages } from './useChatMessages';
 
@@ -237,7 +239,8 @@ export function useChatSessionState({
       return;
     }
 
-    const prov = (localStorage.getItem('selected-provider') as LLMProvider) || 'claude';
+    const fallbackProvider = (localStorage.getItem('selected-provider') as LLMProvider) || 'claude';
+    const prov = resolveSessionProvider(selectedSession, fallbackProvider);
     const normalized = chatMessageToNormalized(pendingUserMessage, activeSessionId, prov);
     if (normalized) {
       sessionStore.appendRealtime(activeSessionId, normalized);
@@ -245,7 +248,7 @@ export function useChatSessionState({
 
     flushedPendingUserMessageRef.current = pendingUserMessage;
     setPendingUserMessage(null);
-  }, [activeSessionId, pendingUserMessage, sessionStore]);
+  }, [activeSessionId, pendingUserMessage, selectedSession, sessionStore]);
 
   const storeMessages = activeSessionId ? sessionStore.getMessages(activeSessionId) : [];
 
@@ -276,12 +279,13 @@ export function useChatSessionState({
       setPendingUserMessage(msg);
       return;
     }
-    const prov = (localStorage.getItem('selected-provider') as LLMProvider) || 'claude';
+    const fallbackProvider = (localStorage.getItem('selected-provider') as LLMProvider) || 'claude';
+    const prov = resolveSessionProvider(selectedSession, fallbackProvider);
     const normalized = chatMessageToNormalized(msg, activeSessionId, prov);
     if (normalized) {
       sessionStore.appendRealtime(activeSessionId, normalized);
     }
-  }, [activeSessionId, sessionStore]);
+  }, [activeSessionId, selectedSession, sessionStore]);
 
   const clearMessages = useCallback(() => {
     if (!activeSessionId) return;
@@ -318,7 +322,9 @@ export function useChatSessionState({
       if (allMessagesLoadedRef.current) return false;
       if (!hasMoreMessages || !selectedSession || !selectedProject) return false;
 
-      const sessionProvider = selectedSession.__provider || 'claude';
+      const sessionProvider = resolveSessionProvider(selectedSession, 'claude');
+      const providerSessionId = getSessionRuntimeId(selectedSession);
+      if (!providerSessionId) return false;
 
       isLoadingMoreRef.current = true;
       const previousScrollHeight = container.scrollHeight;
@@ -327,6 +333,7 @@ export function useChatSessionState({
       try {
         const slot = await sessionStore.fetchMore(selectedSession.id, {
           provider: sessionProvider as LLMProvider,
+          providerSessionId,
           // DB-assigned projectId replaces the legacy folder-derived name.
           projectId: selectedProject.projectId,
           projectPath: selectedProject.fullPath || selectedProject.path || '',
@@ -411,7 +418,31 @@ export function useChatSessionState({
       return;
     }
 
-    const provider = (selectedSession.__provider || localStorage.getItem('selected-provider') as Provider) || 'claude';
+    // Orchestrator sessions: skip if uninitialized (no AI session yet)
+    const orchType = (selectedSession as any)?.type;
+    const providerSessionId = getSessionRuntimeId(selectedSession);
+    if (orchType && !providerSessionId) {
+      resetStreamingState();
+      pendingViewSessionRef.current = null;
+      setClaudeStatus(null);
+      setCanAbortSession(false);
+      setIsLoading(false);
+      setCurrentSessionId(null);
+      sessionStorage.removeItem('cursorSessionId');
+      messagesOffsetRef.current = 0;
+      setHasMoreMessages(false);
+      setTotalMessages(0);
+      setTokenBudget(null);
+      lastLoadedSessionKeyRef.current = null;
+      setVisibleMessageCount(INITIAL_VISIBLE_MESSAGES);
+      setAllMessagesLoaded(false);
+      allMessagesLoadedRef.current = false;
+      setIsLoadingAllMessages(false);
+      return;
+    }
+
+    const fallbackProvider = (localStorage.getItem('selected-provider') as Provider) || 'claude';
+    const provider = resolveSessionProvider(selectedSession, fallbackProvider);
     const sessionKey = `${selectedSession.id}:${selectedProject.projectId}:${provider}`;
 
     // Skip if already loaded and fresh
@@ -446,14 +477,19 @@ export function useChatSessionState({
       setIsLoading(false);
     }
 
-    setCurrentSessionId(selectedSession.id);
+    const requestSessionId = providerSessionId;
+    if (!requestSessionId) {
+      setIsLoadingSessionMessages(false);
+      return;
+    }
+    setCurrentSessionId(requestSessionId);
     if (provider === 'cursor') {
-      sessionStorage.setItem('cursorSessionId', selectedSession.id);
+      sessionStorage.setItem('cursorSessionId', requestSessionId);
     }
 
     // Check session status
     if (ws) {
-      sendMessage({ type: 'check-session-status', sessionId: selectedSession.id, provider });
+      sendMessage({ type: 'check-session-status', sessionId: requestSessionId, provider });
     }
 
     lastLoadedSessionKeyRef.current = sessionKey;
@@ -461,7 +497,8 @@ export function useChatSessionState({
     // Fetch from server → store updates → chatMessages re-derives automatically
     setIsLoadingSessionMessages(true);
     sessionStore.fetchFromServer(selectedSession.id, {
-      provider: (selectedSession.__provider || provider) as LLMProvider,
+      provider: provider as LLMProvider,
+      providerSessionId: requestSessionId,
       projectId: selectedProject.projectId,
       projectPath: selectedProject.fullPath || selectedProject.path || '',
       limit: MESSAGES_PER_PAGE,
@@ -492,12 +529,18 @@ export function useChatSessionState({
 
     const reloadExternalMessages = async () => {
       try {
-        const provider = (localStorage.getItem('selected-provider') as Provider) || 'claude';
+        const fallbackProvider = (localStorage.getItem('selected-provider') as Provider) || 'claude';
+        const provider = resolveSessionProvider(selectedSession, fallbackProvider);
+        const providerSessionId = getSessionRuntimeId(selectedSession);
+        if (!providerSessionId) {
+          return;
+        }
 
         // Skip store refresh during active streaming
         if (!isLoading) {
           await sessionStore.refreshFromServer(selectedSession.id, {
-            provider: (selectedSession.__provider || provider) as LLMProvider,
+            provider: provider as LLMProvider,
+            providerSessionId,
             projectId: selectedProject.projectId,
             projectPath: selectedProject.fullPath || selectedProject.path || '',
           });
@@ -550,11 +593,16 @@ export function useChatSessionState({
 
     const scrollToTarget = async () => {
       if (!allMessagesLoadedRef.current && selectedSession && selectedProject) {
-        const sessionProvider = selectedSession.__provider || 'claude';
+        const sessionProvider = resolveSessionProvider(selectedSession, 'claude');
+        const providerSessionId = getSessionRuntimeId(selectedSession);
+        if (!providerSessionId) {
+          return;
+        }
           try {
             // Load all messages into the store for search navigation
             const slot = await sessionStore.fetchFromServer(selectedSession.id, {
               provider: sessionProvider as LLMProvider,
+              providerSessionId,
               projectId: selectedProject.projectId,
               projectPath: selectedProject.fullPath || selectedProject.path || '',
               limit: null,
@@ -630,13 +678,15 @@ export function useChatSessionState({
       setTokenBudget(null);
       return;
     }
-    const sessionProvider = selectedSession.__provider || 'claude';
+    const sessionProvider = resolveSessionProvider(selectedSession, 'claude');
+    const providerSessionId = getSessionRuntimeId(selectedSession);
+    if (!providerSessionId) return;
     if (sessionProvider !== 'claude') return;
 
     const fetchInitialTokenUsage = async () => {
       try {
         // Token usage endpoint is now keyed by the DB projectId.
-        const url = `/api/projects/${selectedProject.projectId}/sessions/${selectedSession.id}/token-usage`;
+        const url = `/api/projects/${selectedProject.projectId}/sessions/${providerSessionId}/token-usage`;
         const response = await authenticatedFetch(url);
         if (response.ok) {
           setTokenBudget(await response.json());
@@ -648,7 +698,7 @@ export function useChatSessionState({
       }
     };
     fetchInitialTokenUsage();
-  }, [selectedProject, selectedSession?.id, selectedSession?.__provider]);
+  }, [selectedProject, selectedSession]);
 
   const visibleMessages = useMemo(() => {
     if (chatMessages.length <= visibleMessageCount) return chatMessages;
@@ -718,7 +768,9 @@ export function useChatSessionState({
   const loadAllMessages = useCallback(async () => {
     if (!selectedSession || !selectedProject) return;
     if (isLoadingAllMessages) return;
-    const sessionProvider = selectedSession.__provider || 'claude';
+    const sessionProvider = resolveSessionProvider(selectedSession, 'claude');
+    const providerSessionId = getSessionRuntimeId(selectedSession);
+    if (!providerSessionId) return;
 
     const requestSessionId = selectedSession.id;
     allMessagesLoadedRef.current = true;
@@ -733,6 +785,7 @@ export function useChatSessionState({
     try {
       const slot = await sessionStore.fetchFromServer(requestSessionId, {
         provider: sessionProvider as LLMProvider,
+        providerSessionId,
         projectId: selectedProject.projectId,
         projectPath: selectedProject.fullPath || selectedProject.path || '',
         limit: null,

@@ -12,12 +12,22 @@
  * - WebSocket message streaming
  */
 
-import { query } from '@anthropic-ai/claude-agent-sdk';
 import crypto from 'crypto';
 import { promises as fs } from 'fs';
-import path from 'path';
 import os from 'os';
+import path from 'path';
+
+import { query } from '@anthropic-ai/claude-agent-sdk';
+
 import { CLAUDE_MODELS } from '../shared/modelConstants.js';
+
+import {
+  bindChildRuntimeFromTool,
+  bindExternalSessionId,
+  finalizeOrchestratorRun,
+  materializeAndBindChildSessionFromTool,
+  prepareOrchestratorCommand,
+} from './modules/orchestrator/index.js';
 import { resolveClaudeCodeExecutablePath } from './shared/claude-cli-path.js';
 import {
   createNotificationEvent,
@@ -25,8 +35,7 @@ import {
   notifyRunStopped,
   notifyUserIfEnabled
 } from './services/notification-orchestrator.js';
-import { sessionsService } from './modules/providers/services/sessions.service.js';
-import { providerAuthService } from './modules/providers/services/provider-auth.service.js';
+import { providerAuthService, sessionsService } from './modules/providers/index.js';
 import { createNormalizedMessage } from './shared/utils.js';
 
 const activeSessions = new Map();
@@ -482,6 +491,10 @@ async function queryClaudeSDK(command, options = {}, ws) {
   let tempImagePaths = [];
   let tempDir = null;
 
+  if (options.orchestratorSessionId && capturedSessionId) {
+    bindExternalSessionId(options.orchestratorSessionId, capturedSessionId);
+  }
+
   const emitNotification = (event) => {
     notifyUserIfEnabled({
       userId: ws?.userId || null,
@@ -502,7 +515,9 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
     // Handle images - save to temp files and modify prompt
     const imageResult = await handleImages(command, options.images, options.cwd);
-    const finalCommand = imageResult.modifiedCommand;
+    const finalCommand = options.orchestratorSessionId
+      ? prepareOrchestratorCommand(options.orchestratorSessionId, imageResult.modifiedCommand)
+      : imageResult.modifiedCommand;
     tempImagePaths = imageResult.tempImagePaths;
     tempDir = imageResult.tempDir;
 
@@ -646,6 +661,10 @@ async function queryClaudeSDK(command, options = {}, ws) {
         capturedSessionId = message.session_id;
         addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws);
 
+        if (options.orchestratorSessionId) {
+          bindExternalSessionId(options.orchestratorSessionId, capturedSessionId);
+        }
+
         // Set session ID on writer
         if (ws.setSessionId && typeof ws.setSessionId === 'function') {
           ws.setSessionId(capturedSessionId);
@@ -670,6 +689,24 @@ async function queryClaudeSDK(command, options = {}, ws) {
         // Preserve parentToolUseId from SDK wrapper for subagent tool grouping
         if (transformedMessage.parentToolUseId && !msg.parentToolUseId) {
           msg.parentToolUseId = transformedMessage.parentToolUseId;
+        }
+        if (options.orchestratorSessionId && msg.kind === 'tool_use') {
+          materializeAndBindChildSessionFromTool(options.orchestratorSessionId, {
+            toolName: msg.toolName,
+            toolInput: msg.toolInput,
+            toolId: msg.toolId,
+            runtimeInfo:
+              msg.toolUseResult
+              || transformedMessage.toolUseResult
+              || transformedMessage.result
+              || null,
+          });
+        }
+        if (options.orchestratorSessionId && msg.kind === 'tool_result') {
+          bindChildRuntimeFromTool(options.orchestratorSessionId, {
+            toolId: msg.toolId,
+            runtimeInfo: msg.toolUseResult,
+          });
         }
         ws.send(msg);
       }
@@ -704,6 +741,12 @@ async function queryClaudeSDK(command, options = {}, ws) {
       sessionName: sessionSummary,
       stopReason: 'completed'
     });
+    if (options.orchestratorSessionId) {
+      finalizeOrchestratorRun(options.orchestratorSessionId, {
+        success: true,
+        runSummary: 'Run completed',
+      });
+    }
     // Complete
 
   } catch (error) {
@@ -725,6 +768,12 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
     // Send error to WebSocket
     ws.send(createNormalizedMessage({ kind: 'error', content: errorContent, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+    if (options.orchestratorSessionId) {
+      finalizeOrchestratorRun(options.orchestratorSessionId, {
+        success: false,
+        errorSummary: error?.message ?? 'Unknown error',
+      });
+    }
     notifyRunFailed({
       userId: ws?.userId || null,
       provider: 'claude',

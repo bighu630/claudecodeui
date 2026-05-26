@@ -9,6 +9,7 @@ import type {
   FolderSuggestion,
   TokenMode,
 } from '../types';
+import type { ProjectRoleModelConfig } from '../../../types/app';
 
 type CloneWorkspaceParams = {
   workspacePath: string;
@@ -16,6 +17,7 @@ type CloneWorkspaceParams = {
   tokenMode: TokenMode;
   selectedGithubToken: string;
   newGithubToken: string;
+  roleModelConfig: ProjectRoleModelConfig;
 };
 
 type CloneProgressHandlers = {
@@ -117,6 +119,7 @@ const buildCloneProgressQuery = ({
   tokenMode,
   selectedGithubToken,
   newGithubToken,
+  roleModelConfig,
 }: CloneWorkspaceParams) => {
   const query = new URLSearchParams({
     path: workspacePath.trim(),
@@ -130,6 +133,8 @@ const buildCloneProgressQuery = ({
   if (tokenMode === 'new' && newGithubToken.trim()) {
     query.set('newGithubToken', newGithubToken.trim());
   }
+
+  query.set('roleModelConfig', JSON.stringify(roleModelConfig));
 
   // EventSource cannot send custom headers, so the auth token is passed as query.
   const authToken = localStorage.getItem('auth-token');

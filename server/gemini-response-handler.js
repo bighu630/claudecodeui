@@ -1,5 +1,9 @@
 // Gemini Response Handler - JSON Stream processing
-import { sessionsService } from './modules/providers/services/sessions.service.js';
+import { sessionsService } from './modules/providers/index.js';
+import {
+  bindChildRuntimeFromTool,
+  materializeAndBindChildSessionFromTool,
+} from './modules/orchestrator/index.js';
 
 class GeminiResponseHandler {
   constructor(ws, options = {}) {
@@ -9,6 +13,7 @@ class GeminiResponseHandler {
     this.onInit = options.onInit || null;
     this.onToolUse = options.onToolUse || null;
     this.onToolResult = options.onToolResult || null;
+    this.orchestratorSessionId = options.orchestratorSessionId || null;
   }
 
   // Process incoming raw data from Gemini stream-json
@@ -58,6 +63,20 @@ class GeminiResponseHandler {
     // Normalize via adapter and send all resulting messages
     const normalized = sessionsService.normalizeMessage('gemini', event, sid);
     for (const msg of normalized) {
+      if (this.orchestratorSessionId && msg.kind === 'tool_use') {
+        materializeAndBindChildSessionFromTool(this.orchestratorSessionId, {
+          toolName: msg.toolName,
+          toolInput: msg.toolInput,
+          toolId: msg.toolId,
+          runtimeInfo: msg.toolUseResult || msg.toolResult?.toolUseResult || msg.content || event,
+        });
+      }
+      if (this.orchestratorSessionId && msg.kind === 'tool_result') {
+        bindChildRuntimeFromTool(this.orchestratorSessionId, {
+          toolId: msg.toolId,
+          runtimeInfo: msg.toolUseResult || msg.toolResult?.toolUseResult || msg.content,
+        });
+      }
       this.ws.send(msg);
     }
   }

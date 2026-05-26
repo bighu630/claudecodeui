@@ -10,6 +10,7 @@ import { PaletteOpsProvider, usePaletteOpsRegister } from '../../contexts/Palett
 import { useDeviceSettings } from '../../hooks/useDeviceSettings';
 import { useSessionProtection } from '../../hooks/useSessionProtection';
 import { useProjectsState } from '../../hooks/useProjectsState';
+import { getSessionRuntimeId } from '../../utils/sessionIdentity';
 
 export default function AppContent() {
   return (
@@ -109,13 +110,15 @@ function AppContentInner() {
       wasConnectedRef.current = false;
     }
 
-    if (isConnected && selectedSession?.id) {
+    const providerSessionId = getSessionRuntimeId(selectedSession);
+
+    if (isConnected && providerSessionId) {
       sendMessage({
         type: 'get-pending-permissions',
-        sessionId: selectedSession.id
+        sessionId: providerSessionId,
       });
     }
-  }, [isConnected, selectedSession?.id, sendMessage]);
+  }, [isConnected, selectedSession, sendMessage]);
 
   // Adjust the app container to stay above the virtual keyboard on iOS Safari.
   // On Chrome for Android the layout viewport already shrinks when the keyboard opens,

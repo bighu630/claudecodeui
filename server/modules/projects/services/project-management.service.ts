@@ -1,7 +1,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+import { ensureProjectOrchestratorBootstrap } from '@/modules/orchestrator/index.js';
 import { projectsDb } from '@/modules/database/index.js';
+import type { ProjectRoleModelConfig } from '@/modules/projects/project-role-config.js';
 import type {
   CreateProjectPathResult,
   ProjectRepositoryRow,
@@ -12,13 +14,17 @@ import { AppError, normalizeProjectPath, validateWorkspacePath } from '@/shared/
 type CreateProjectInput = {
   projectPath: string;
   customName?: string | null;
+  roleModelConfig?: unknown;
 };
 
 type CreateProjectDependencies = {
   validatePath: (projectPath: string) => Promise<WorkspacePathValidationResult>;
   ensureWorkspaceDirectory: (projectPath: string) => Promise<void>;
   persistProjectPath: (projectPath: string, customName: string | null) => CreateProjectPathResult;
+  persistProjectRoleModelConfig: (projectId: string, roleModelConfig: unknown) => ProjectRoleModelConfig;
+  getProjectRoleModelConfig: (projectId: string) => ProjectRoleModelConfig;
   getProjectByPath: (projectPath: string) => ProjectRepositoryRow | null;
+  bootstrapOrchestrator: (params: { projectId: string; workspacePath: string }) => void;
 };
 
 type ProjectApiView = {
@@ -29,6 +35,7 @@ type ProjectApiView = {
   customName: string | null;
   isArchived: boolean;
   isStarred: boolean;
+  roleModelConfig: ProjectRoleModelConfig;
   sessions: [];
   cursorSessions: [];
   codexSessions: [];
@@ -58,8 +65,18 @@ const defaultDependencies: CreateProjectDependencies = {
   },
   persistProjectPath: (projectPath: string, customName: string | null): CreateProjectPathResult =>
     projectsDb.createProjectPath(projectPath, customName),
+  persistProjectRoleModelConfig: (projectId: string, roleModelConfig: unknown): ProjectRoleModelConfig =>
+    projectsDb.saveProjectRoleModelConfig(projectId, roleModelConfig),
+  getProjectRoleModelConfig: (projectId: string): ProjectRoleModelConfig =>
+    projectsDb.getProjectRoleModelConfig(projectId),
   getProjectByPath: (projectPath: string): ProjectRepositoryRow | null =>
     projectsDb.getProjectPath(projectPath),
+  bootstrapOrchestrator: ({ projectId, workspacePath }: { projectId: string; workspacePath: string }): void => {
+    ensureProjectOrchestratorBootstrap({
+      projectId,
+      workspacePath,
+    });
+  },
 };
 
 function resolveDisplayName(customName: string | null | undefined, projectPath: string): string {
@@ -71,7 +88,7 @@ function resolveDisplayName(customName: string | null | undefined, projectPath: 
   return path.basename(projectPath) || projectPath;
 }
 
-function mapProjectRowToApiView(projectRow: ProjectRepositoryRow): ProjectApiView {
+function mapProjectRowToApiView(projectRow: ProjectRepositoryRow, roleModelConfig: ProjectRoleModelConfig): ProjectApiView {
   return {
     projectId: projectRow.project_id,
     path: projectRow.project_path,
@@ -80,6 +97,7 @@ function mapProjectRowToApiView(projectRow: ProjectRepositoryRow): ProjectApiVie
     customName: projectRow.custom_project_name,
     isArchived: Boolean(projectRow.isArchived),
     isStarred: Boolean(projectRow.isStarred),
+    roleModelConfig,
     sessions: [],
     cursorSessions: [],
     codexSessions: [],
@@ -134,10 +152,16 @@ export async function createProject(
     });
   }
 
+  const roleModelConfig = dependencies.persistProjectRoleModelConfig(projectRow.project_id, input.roleModelConfig);
+  dependencies.bootstrapOrchestrator({
+    projectId: projectRow.project_id,
+    workspacePath: resolvedProjectPath,
+  });
+
   // Archived rows intentionally remain archived when reused, as requested.
   return {
     outcome: persistedProject.outcome,
-    project: mapProjectRowToApiView(projectRow),
+    project: mapProjectRowToApiView(projectRow, roleModelConfig ?? dependencies.getProjectRoleModelConfig(projectRow.project_id)),
   };
 }
 

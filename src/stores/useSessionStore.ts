@@ -329,6 +329,8 @@ export function useSessionStore() {
       provider?: LLMProvider;
       projectId?: string;
       projectPath?: string;
+      providerSessionId?: string | null;
+      runtimeSessionId?: string | null;
       limit?: number | null;
       offset?: number;
     } = {},
@@ -345,8 +347,9 @@ export function useSessionStore() {
         params.append('offset', String(opts.offset ?? 0));
       }
 
+      const requestSessionId = opts.providerSessionId || opts.runtimeSessionId || resolvedSessionId;
       const qs = params.toString();
-      const url = `/api/providers/sessions/${encodeURIComponent(resolvedSessionId)}/messages${qs ? `?${qs}` : ''}`;
+      const url = `/api/providers/sessions/${encodeURIComponent(requestSessionId)}/messages${qs ? `?${qs}` : ''}`;
       const response = await authenticatedFetch(url);
 
       if (!response.ok) {
@@ -354,7 +357,11 @@ export function useSessionStore() {
       }
 
       const data = await response.json();
-      const messages: NormalizedMessage[] = data.messages || [];
+      const messages: NormalizedMessage[] = (data.messages || []).map((message: NormalizedMessage) =>
+        message.sessionId === resolvedSessionId
+          ? message
+          : { ...message, sessionId: resolvedSessionId },
+      );
 
       slot.serverMessages = messages;
       slot.total = data.total ?? messages.length;
@@ -386,6 +393,8 @@ export function useSessionStore() {
       provider?: LLMProvider;
       projectId?: string;
       projectPath?: string;
+      providerSessionId?: string | null;
+      runtimeSessionId?: string | null;
       limit?: number;
     } = {},
   ) => {
@@ -398,14 +407,19 @@ export function useSessionStore() {
     params.append('limit', String(limit));
     params.append('offset', String(slot.offset));
 
+    const requestSessionId = opts.providerSessionId || opts.runtimeSessionId || resolvedSessionId;
     const qs = params.toString();
-    const url = `/api/providers/sessions/${encodeURIComponent(resolvedSessionId)}/messages${qs ? `?${qs}` : ''}`;
+    const url = `/api/providers/sessions/${encodeURIComponent(requestSessionId)}/messages${qs ? `?${qs}` : ''}`;
 
     try {
       const response = await authenticatedFetch(url);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
-      const olderMessages: NormalizedMessage[] = data.messages || [];
+      const olderMessages: NormalizedMessage[] = (data.messages || []).map((message: NormalizedMessage) =>
+        message.sessionId === resolvedSessionId
+          ? message
+          : { ...message, sessionId: resolvedSessionId },
+      );
 
       // Prepend older messages (they're earlier in the conversation)
       slot.serverMessages = [...olderMessages, ...slot.serverMessages];
@@ -466,10 +480,12 @@ export function useSessionStore() {
    */
   const refreshFromServer = useCallback(async (
     sessionId: string,
-    _opts: {
+    opts: {
       provider?: LLMProvider;
       projectId?: string;
       projectPath?: string;
+      providerSessionId?: string | null;
+      runtimeSessionId?: string | null;
     } = {},
   ) => {
     const resolvedSessionId = resolveSessionId(sessionId) ?? sessionId;
@@ -477,14 +493,19 @@ export function useSessionStore() {
     try {
       const params = new URLSearchParams();
 
+      const requestSessionId = opts.providerSessionId || opts.runtimeSessionId || resolvedSessionId;
       const qs = params.toString();
-      const url = `/api/providers/sessions/${encodeURIComponent(resolvedSessionId)}/messages${qs ? `?${qs}` : ''}`;
+      const url = `/api/providers/sessions/${encodeURIComponent(requestSessionId)}/messages${qs ? `?${qs}` : ''}`;
       const response = await authenticatedFetch(url);
 
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
 
-      slot.serverMessages = data.messages || [];
+      slot.serverMessages = (data.messages || []).map((message: NormalizedMessage) =>
+        message.sessionId === resolvedSessionId
+          ? message
+          : { ...message, sessionId: resolvedSessionId },
+      );
       slot.total = data.total ?? slot.serverMessages.length;
       slot.hasMore = Boolean(data.hasMore);
       slot.fetchedAt = Date.now();

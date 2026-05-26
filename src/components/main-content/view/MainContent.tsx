@@ -9,11 +9,14 @@ import type { MainContentProps } from '../types/types';
 import { useTaskMaster } from '../../../contexts/TaskMasterContext';
 import { usePaletteOpsRegister } from '../../../contexts/PaletteOpsContext';
 import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
+import { useSessionDetail } from '../../../hooks/useSessionTree';
 import { useUiPreferences } from '../../../hooks/useUiPreferences';
 import { useEditorSidebar } from '../../code-editor/hooks/useEditorSidebar';
 import EditorSidebar from '../../code-editor/view/EditorSidebar';
 import type { Project } from '../../../types/app';
+import { getSessionOrchestratorId, isOrchestratorSession } from '../../../utils/sessionIdentity';
 import { TaskMasterPanel } from '../../task-master';
+import SessionPanel from './subcomponents/SessionPanel';
 
 import MainContentHeader from './subcomponents/MainContentHeader';
 import MainContentStateView from './subcomponents/MainContentStateView';
@@ -74,6 +77,11 @@ function MainContent({
     selectedProject,
     isMobile,
   });
+
+  const selectedOrchSessionId = isOrchestratorSession(selectedSession)
+    ? getSessionOrchestratorId(selectedSession)
+    : null;
+  const { session: orchSession, taskSpec: orchTaskSpec, refresh: refreshOrchSession } = useSessionDetail(selectedOrchSessionId);
 
   useEffect(() => {
     // Identify projects by DB `projectId`; the TaskMaster context uses the
@@ -174,6 +182,10 @@ function MainContent({
           )}
 
           {shouldShowTasksTab && <TaskMasterPanel isVisible={activeTab === 'tasks'} />}
+
+          {activeTab === 'session-panel' && (
+            <SessionPanel session={orchSession} taskSpec={orchTaskSpec} />
+          )}
 
           <div className={`h-full overflow-hidden ${activeTab === 'preview' ? 'block' : 'hidden'}`} />
 

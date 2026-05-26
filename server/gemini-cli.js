@@ -7,8 +7,9 @@ import crossSpawn from 'cross-spawn';
 
 import sessionManager from './sessionManager.js';
 import GeminiResponseHandler from './gemini-response-handler.js';
+import { bindExternalSessionId, finalizeOrchestratorRun, prepareOrchestratorCommand } from './modules/orchestrator/index.js';
 import { notifyRunFailed, notifyRunStopped } from './services/notification-orchestrator.js';
-import { providerAuthService } from './modules/providers/services/provider-auth.service.js';
+import { providerAuthService } from './modules/providers/index.js';
 import { createNormalizedMessage } from './shared/utils.js';
 
 // Use cross-spawn on Windows for correct .cmd resolution (same pattern as cursor-cli.js)
@@ -123,6 +124,13 @@ async function spawnGemini(command, options = {}, ws) {
     let capturedSessionId = sessionId; // Track session ID throughout the process
     let sessionCreatedSent = false; // Track if we've already sent session-created event
     let assistantBlocks = []; // Accumulate the full response blocks including tools
+    const initialCommand = options.orchestratorSessionId
+        ? prepareOrchestratorCommand(options.orchestratorSessionId, command)
+        : command;
+
+    if (options.orchestratorSessionId && capturedSessionId) {
+        bindExternalSessionId(options.orchestratorSessionId, capturedSessionId);
+    }
 
     // Use tools settings passed from frontend, or defaults
     const settings = toolsSettings || {
@@ -135,8 +143,8 @@ async function spawnGemini(command, options = {}, ws) {
     const args = [];
 
     // Add prompt flag with command if we have a command
-    if (command && command.trim()) {
-        args.push('--prompt', command);
+    if (initialCommand && initialCommand.trim()) {
+        args.push('--prompt', initialCommand);
     }
 
     // If we have a sessionId, we want to resume
@@ -181,13 +189,13 @@ async function spawnGemini(command, options = {}, ws) {
 
             // Include the full image paths in the prompt for Gemini to reference
             // Gemini CLI can read images from file paths in the prompt
-            if (tempImagePaths.length > 0 && command && command.trim()) {
+            if (tempImagePaths.length > 0 && initialCommand && initialCommand.trim()) {
                 const imageNote = `\n\n[Images given: ${tempImagePaths.length} images are located at the following paths:]\n${tempImagePaths.map((p, i) => `${i + 1}. ${p}`).join('\n')}`;
-                const modifiedCommand = command + imageNote;
+                const modifiedCommand = initialCommand + imageNote;
 
                 // Update the command in args
                 const promptIndex = args.indexOf('--prompt');
-                if (promptIndex !== -1 && args[promptIndex + 1] === command) {
+                if (promptIndex !== -1 && args[promptIndex + 1] === initialCommand) {
                     args[promptIndex + 1] = modifiedCommand;
                 } else if (promptIndex !== -1) {
                     // If we're using context, update the full prompt
@@ -346,14 +354,15 @@ async function spawnGemini(command, options = {}, ws) {
         startTimeout();
 
         // Save user message to session when starting
-        if (command && capturedSessionId) {
-            sessionManager.addMessage(capturedSessionId, 'user', command);
+        if (initialCommand && capturedSessionId) {
+            sessionManager.addMessage(capturedSessionId, 'user', initialCommand);
         }
 
         // Create response handler for NDJSON buffering
         let responseHandler;
         if (ws) {
             responseHandler = new GeminiResponseHandler(ws, {
+                orchestratorSessionId: options.orchestratorSessionId,
                 onContentFragment: (content) => {
                     if (assistantBlocks.length > 0 && assistantBlocks[assistantBlocks.length - 1].type === 'text') {
                         assistantBlocks[assistantBlocks.length - 1].text += content;
@@ -395,9 +404,13 @@ async function spawnGemini(command, options = {}, ws) {
                     if (!capturedSessionId) {
                         capturedSessionId = discoveredSessionId;
 
+                        if (options.orchestratorSessionId) {
+                            bindExternalSessionId(options.orchestratorSessionId, capturedSessionId);
+                        }
+
                         sessionManager.createSession(capturedSessionId, cwd || process.cwd());
-                        if (command) {
-                            sessionManager.addMessage(capturedSessionId, 'user', command);
+                        if (initialCommand) {
+                            sessionManager.addMessage(capturedSessionId, 'user', initialCommand);
                         }
 
                         if (processKey !== capturedSessionId) {
@@ -493,6 +506,12 @@ async function spawnGemini(command, options = {}, ws) {
             }
 
             if (code === 0) {
+                if (options.orchestratorSessionId) {
+                    finalizeOrchestratorRun(options.orchestratorSessionId, {
+                        success: true,
+                        runSummary: 'Run completed',
+                    });
+                }
                 notifyTerminalState({ code });
                 resolve();
             } else {
@@ -535,6 +554,15 @@ async function spawnGemini(command, options = {}, ws) {
                     code,
                     error: code === null ? 'Gemini CLI process was terminated or timed out' : null
                 });
+                if (options.orchestratorSessionId) {
+                    finalizeOrchestratorRun(options.orchestratorSessionId, {
+                        success: false,
+                        errorSummary: terminalFailureReason
+                            || (code === null
+                                ? 'Gemini CLI process was terminated or timed out'
+                                : `Gemini CLI exited with code ${code}`),
+                    });
+                }
                 reject(
                     new Error(
                         terminalFailureReason
@@ -560,6 +588,12 @@ async function spawnGemini(command, options = {}, ws) {
 
             const errorSessionId = typeof ws.getSessionId === 'function' ? ws.getSessionId() : finalSessionId;
             ws.send(createNormalizedMessage({ kind: 'error', content: errorContent, sessionId: errorSessionId, provider: 'gemini' }));
+            if (options.orchestratorSessionId) {
+                finalizeOrchestratorRun(options.orchestratorSessionId, {
+                    success: false,
+                    errorSummary: error?.message ?? 'Unknown error',
+                });
+            }
             notifyTerminalState({ error });
 
             reject(error);
