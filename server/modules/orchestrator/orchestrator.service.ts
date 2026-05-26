@@ -801,11 +801,9 @@ function deriveChildSessionType(parentType: SessionType): SessionType | null {
 
 function isMaterializableTool(toolName: string | null | undefined, toolInput: unknown): boolean {
   if (getToolNameVariants(toolName).some((variant) => MATERIALIZABLE_TOOL_NAMES.has(variant))) {
-    console.log("[DEBUG][orchestrator] isMaterializableTool=true via toolName:", toolName);
     return true;
   }
 
-  console.log("[DEBUG][orchestrator] isMaterializableTool checking input for role fields, toolName:", toolName);
   const input = readToolInputRecord(toolInput);
   if (!input) {
     return false;

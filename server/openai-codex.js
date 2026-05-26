@@ -309,33 +309,14 @@ export async function queryCodex(command, options = {}, ws) {
         continue;
       }
 
-      // DEBUG: log raw event shape before transform for orchestrator child session debugging
-      if (options.orchestratorSessionId) {
-        const evItemType = event.item?.type ?? 'N/A';
-        const evItemId = event.item?.id ?? 'N/A';
-        console.log('[DEBUG][codex-raw-event] event.type=%s item.type=%s item.id=%s',
-          event.type, evItemType, evItemId);
-      }
-
       const transformed = transformCodexEvent(event);
 
       // Normalize the transformed event into NormalizedMessage(s) via adapter
       const normalizedMsgs = sessionsService.normalizeMessage('codex', transformed, capturedSessionId || sessionId || null);
 
-      // DEBUG: log event type and tool_use messages for orchestrator child session debugging
-      if (options.orchestratorSessionId && normalizedMsgs.length > 0) {
-        const toolUseMsgs = normalizedMsgs.filter(m => m.kind === 'tool_use');
-        if (toolUseMsgs.length > 0) {
-          console.log('[DEBUG][codex-handler] event.type=%s normalizedMsgs=%d toolUseMsgs=%d', event.type, normalizedMsgs.length, toolUseMsgs.length);
-          for (const m of toolUseMsgs) {
-            console.log('[DEBUG][codex-handler]   toolName=%s toolId=%s inputKeys=%s', m.toolName, m.toolId, Object.keys(m.toolInput || {}).join(','));
-          }
-        }
-      }
 
       for (const msg of normalizedMsgs) {
         if (options.orchestratorSessionId && msg.kind === 'tool_use') {
-          console.log('[DEBUG][codex-handler] -> materializeAndBindChildSessionFromTool toolName=%s toolId=%s', msg.toolName, msg.toolId);
           materializeAndBindChildSessionFromTool(options.orchestratorSessionId, {
             toolName: msg.toolName,
             toolInput: msg.toolInput,
