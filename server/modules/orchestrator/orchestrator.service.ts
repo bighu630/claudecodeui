@@ -1,7 +1,7 @@
-import type Database from 'better-sqlite3';
 import { v4 as uuidv4 } from 'uuid';
 
-import { getConnection, projectsDb } from '@/modules/database/index.js';
+import { projectsDb } from '@/modules/database/index.js';
+import { orchestratorSessionsDb } from '@/modules/database/index.js';
 import { AppError } from '@/shared/utils.js';
 
 import { composePrompt, featureLeadStartupMessage, workerStartupMessage, getRolePrompt } from './prompts.js';
@@ -109,10 +109,6 @@ export function canCreateChild(parentType: SessionType, childType: SessionType):
   return DERIVATION_RULES[parentType]?.includes(childType) ?? false;
 }
 
-function getDb(): Database.Database {
-  return getConnection();
-}
-
 function normalizeSessionTitle(title: string, fallback: string): string {
   const normalized = title.replace(/\s+/g, ' ').trim();
   if (!normalized) {
@@ -125,23 +121,11 @@ function normalizeSessionTitle(title: string, fallback: string): string {
 }
 
 function getTechLeadSession(projectId: string): OrchestratorSession | undefined {
-  const db = getDb();
-  return db.prepare(
-    "SELECT * FROM orchestrator_sessions WHERE project_id = ? AND type = 'tech_lead' AND lifecycle_status != 'archived' ORDER BY created_at ASC LIMIT 1"
-  ).get(projectId) as OrchestratorSession | undefined;
+  return orchestratorSessionsDb.getTechLeadSession(projectId);
 }
 
 function getActiveRootSession(projectId: string, type: BootstrapRootSessionType): OrchestratorSession | undefined {
-  const db = getDb();
-  return db.prepare(
-    `SELECT * FROM orchestrator_sessions
-     WHERE project_id = ?
-       AND type = ?
-       AND parent_id IS NULL
-       AND lifecycle_status != 'archived'
-     ORDER BY created_at ASC
-     LIMIT 1`
-  ).get(projectId, type) as OrchestratorSession | undefined;
+  return orchestratorSessionsDb.getActiveRootSession(projectId, type);
 }
 
 function assertRootSessionUniqueness(projectId: string, type: BootstrapRootSessionType): void {
@@ -266,7 +250,6 @@ export function createSession(params: {
   workspace_path?: string;
   goal_and_constraints?: string;
 }): OrchestratorSession {
-  const db = getDb();
   const id = uuidv4();
   const defaults = SESSION_DEFAULTS[params.type];
   let resolvedParentId = resolveSessionParent({
@@ -295,41 +278,39 @@ export function createSession(params: {
   const resolvedProvider = params.provider ?? roleDefaults?.provider ?? parentSession?.provider ?? null;
   const resolvedModel = params.model ?? roleDefaults?.model ?? parentSession?.model ?? null;
 
-  const stmt = db.prepare(`
-    INSERT INTO orchestrator_sessions (
-      id, project_id, parent_id, provider, model, type, title,
-      interaction_mode, lifecycle_status, run_status,
-      system_prompt, role_prompt, project_knowledge_snapshot,
-      goal_and_constraints, workspace_path, auto_run
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)
-  `);
+  const session = orchestratorSessionsDb.createSession({
+    id,
+    project_id: params.project_id,
+    parent_id: resolvedParentId,
+    provider: resolvedProvider,
+    model: resolvedModel,
+    type: params.type,
+    title: resolvedTitle,
+    interaction_mode: defaults.interaction_mode,
+    run_status: defaults.run_status,
+    system_prompt: composedSystemPrompt,
+    role_prompt: rolePrompt,
+    project_knowledge_snapshot: knowledgeSnapshot,
+    goal_and_constraints: params.goal_and_constraints ?? '',
+    workspace_path: params.workspace_path ?? null,
+    auto_run: defaults.auto_run,
+  });
 
-  stmt.run(
-    id, params.project_id, resolvedParentId, resolvedProvider, resolvedModel, params.type, resolvedTitle,
-    defaults.interaction_mode, defaults.run_status,
-    composedSystemPrompt, rolePrompt, knowledgeSnapshot,
-    params.goal_and_constraints ?? '', params.workspace_path ?? null, defaults.auto_run,
-  );
-
-  insertEvent(db, id, null, 'session_created', { type: params.type, parent_id: resolvedParentId });
+  orchestratorSessionsDb.recordSessionEvent({ sessionId: id, runId: null, eventType: 'session_created', payload: { type: params.type, parent_id: resolvedParentId } });
 
   if (resolvedParentId) {
-    insertEvent(db, resolvedParentId, null, 'child_session_created', { child_id: id, child_type: params.type });
+    orchestratorSessionsDb.recordSessionEvent({ sessionId: resolvedParentId, runId: null, eventType: 'child_session_created', payload: { child_id: id, child_type: params.type } });
   }
 
-  return getSession(id)!;
+  return session;
 }
 
 export function getSession(id: string): OrchestratorSession | undefined {
-  const db = getDb();
-  return db.prepare('SELECT * FROM orchestrator_sessions WHERE id = ?').get(id) as OrchestratorSession | undefined;
+  return orchestratorSessionsDb.getSession(id);
 }
 
 export function getSessionByRuntimeSessionId(externalSessionId: string): OrchestratorSession | undefined {
-  const db = getDb();
-  return db.prepare(
-    "SELECT * FROM orchestrator_sessions WHERE runtime_session_id = ? AND lifecycle_status != 'archived' ORDER BY updated_at DESC, created_at DESC LIMIT 1"
-  ).get(externalSessionId) as OrchestratorSession | undefined;
+  return orchestratorSessionsDb.getSessionByRuntimeSessionId(externalSessionId);
 }
 
 export function isSessionVisibleInTree(session: OrchestratorSession): boolean {
@@ -337,89 +318,20 @@ export function isSessionVisibleInTree(session: OrchestratorSession): boolean {
 }
 
 function syncDescendantSessionConfig(id: string, provider: string, model: string | null): void {
-  const db = getDb();
-  const descendants = db.prepare(`
-    WITH RECURSIVE descendants AS (
-      SELECT id, type
-      FROM orchestrator_sessions
-      WHERE parent_id = ?
-      UNION ALL
-      SELECT child.id, child.type
-      FROM orchestrator_sessions AS child
-      INNER JOIN descendants AS parent_descendant ON child.parent_id = parent_descendant.id
-    )
-    SELECT id, type FROM descendants
-    WHERE type IN ('feature_lead', 'worker')
-  `).all(id) as Array<{ id: string; type: SessionType }>;
-
-  const updateStmt = db.prepare(
-    "UPDATE orchestrator_sessions SET provider = ?, model = ?, updated_at = datetime('now') WHERE id = ?"
-  );
-
-  for (const descendant of descendants) {
-    updateStmt.run(provider, model, descendant.id);
-    insertEvent(db, descendant.id, null, 'status_changed', {
-      inherited_from_parent: true,
-      provider,
-      model,
-    });
-  }
+  orchestratorSessionsDb.syncDescendantSessionConfig(id, provider, model);
 }
 
 export function initializeSession(id: string, provider: string, model?: string): void {
-  const db = getDb();
-  db.prepare("UPDATE orchestrator_sessions SET provider = ?, model = ?, updated_at = datetime('now') WHERE id = ?").run(provider, model ?? null, id);
+  orchestratorSessionsDb.initializeSession(id, provider, model ?? null);
   syncDescendantSessionConfig(id, provider, model ?? null);
   updateSessionStatus(id, { run_status: 'idle' });
-  insertEvent(db, id, null, 'status_changed', { initialized: true, provider, model });
 }
 
 export function updateSessionStatus(
   id: string,
   updates: Partial<Pick<OrchestratorSession, 'lifecycle_status' | 'run_status' | 'runtime_session_id' | 'summary_text' | 'last_run_summary' | 'last_error_summary'>>,
 ): void {
-  const db = getDb();
-  const sets: string[] = [];
-  const values: unknown[] = [];
-
-  if (updates.lifecycle_status !== undefined) {
-    sets.push('lifecycle_status = ?');
-    values.push(updates.lifecycle_status);
-  }
-  if (updates.run_status !== undefined) {
-    sets.push('run_status = ?');
-    values.push(updates.run_status);
-  }
-  if (updates.runtime_session_id !== undefined) {
-    sets.push('runtime_session_id = ?');
-    values.push(updates.runtime_session_id);
-  }
-  if (updates.summary_text !== undefined) {
-    sets.push('summary_text = ?');
-    values.push(updates.summary_text);
-  }
-  if (updates.last_run_summary !== undefined) {
-    sets.push('last_run_summary = ?');
-    values.push(updates.last_run_summary);
-  }
-  if (updates.last_error_summary !== undefined) {
-    sets.push('last_error_summary = ?');
-    values.push(updates.last_error_summary);
-  }
-
-  if (sets.length === 0) return;
-
-  sets.push("updated_at = datetime('now')");
-  values.push(id);
-
-  db.prepare(`UPDATE orchestrator_sessions SET ${sets.join(', ')} WHERE id = ?`).run(...values);
-
-  if (updates.lifecycle_status || updates.run_status) {
-    insertEvent(db, id, null, 'status_changed', {
-      lifecycle_status: updates.lifecycle_status,
-      run_status: updates.run_status,
-    });
-  }
+  orchestratorSessionsDb.updateSessionStatus(id, updates);
 }
 
 class SilentSessionWriter {
@@ -441,21 +353,15 @@ class SilentSessionWriter {
 }
 
 export function archiveWorker(id: string): void {
-  const db = getDb();
   const session = getSession(id);
   if (!session || session.type !== 'worker') return;
   if (session.lifecycle_status !== 'completed') return;
 
-  db.prepare("UPDATE orchestrator_sessions SET lifecycle_status = 'archived', archived_at = datetime('now'), updated_at = datetime('now') WHERE id = ?").run(id);
-  insertEvent(db, id, null, 'archived', {});
+  orchestratorSessionsDb.archiveWorker(id);
 }
 
 export function getSessionTree(project_id: string): SessionTreeNode[] {
-  const db = getDb();
-  const rows = db.prepare(
-    "SELECT * FROM orchestrator_sessions WHERE project_id = ? AND lifecycle_status != 'archived' ORDER BY created_at ASC"
-  ).all(project_id) as OrchestratorSession[];
-
+  const rows = orchestratorSessionsDb.getAllSessionsForProject(project_id);
   return buildTree(rows.filter(isSessionVisibleInTree));
 }
 
@@ -518,16 +424,11 @@ function buildTree(rows: OrchestratorSession[]): SessionTreeNode[] {
 }
 
 export function getProjectKnowledge(project_id: string): string {
-  const db = getDb();
-  const row = db.prepare('SELECT content FROM project_knowledge WHERE project_id = ?').get(project_id) as { content: string } | undefined;
-  return row?.content ?? '';
+  return orchestratorSessionsDb.getProjectKnowledge(project_id);
 }
 
 export function ensureProjectKnowledge(project_id: string, initialContent: string = ''): void {
-  const db = getDb();
-  db.prepare(
-    'INSERT OR IGNORE INTO project_knowledge (id, project_id, content) VALUES (?, ?, ?)'
-  ).run(uuidv4(), project_id, initialContent);
+  orchestratorSessionsDb.ensureProjectKnowledge(project_id, initialContent);
 }
 
 export function ensureProjectOrchestratorBootstrap(params: {
@@ -551,26 +452,15 @@ export function ensureProjectOrchestratorBootstrap(params: {
 }
 
 export function createTaskSpec(params: Omit<WorkerTaskSpec, 'id' | 'created_at'>): WorkerTaskSpec {
-  const db = getDb();
-  const id = uuidv4();
-  db.prepare(`
-    INSERT INTO worker_task_specs (id, worker_session_id, title, objective, scope, constraints, input_context, expected_output, acceptance_criteria, created_by_session_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, params.worker_session_id, params.title, params.objective, params.scope, params.constraints, params.input_context, params.expected_output, params.acceptance_criteria, params.created_by_session_id);
-
-  insertEvent(db, params.worker_session_id, null, 'task_spec_created', { title: params.title });
-
-  return { id, ...params, created_at: new Date().toISOString() };
+  return orchestratorSessionsDb.createTaskSpec(params);
 }
 
 export function getTaskSpec(worker_session_id: string): WorkerTaskSpec | undefined {
-  const db = getDb();
-  return db.prepare('SELECT * FROM worker_task_specs WHERE worker_session_id = ?').get(worker_session_id) as WorkerTaskSpec | undefined;
+  return orchestratorSessionsDb.getTaskSpec(worker_session_id);
 }
 
 export function getTaskSpecsByCreator(created_by_session_id: string): WorkerTaskSpec[] {
-  const db = getDb();
-  return db.prepare('SELECT * FROM worker_task_specs WHERE created_by_session_id = ? ORDER BY created_at DESC').all(created_by_session_id) as WorkerTaskSpec[];
+  return orchestratorSessionsDb.getTasksByParentSessionId(created_by_session_id);
 }
 
 export function onWorkerCompleted(workerSessionId: string, success: boolean, runSummary: string, errorSummary?: string): void {
@@ -719,17 +609,8 @@ export function finalizeOrchestratorRun(
   });
 }
 
-function insertEvent(db: Database.Database, sessionId: string, runId: string | null, eventType: string, payload: Record<string, unknown>): void {
-  db.prepare(
-    'INSERT INTO session_events (id, session_id, run_id, event_type, payload_json) VALUES (?, ?, ?, ?, ?)'
-  ).run(uuidv4(), sessionId, runId, eventType, JSON.stringify(payload));
-}
-
 export function getSessionEvents(sessionId: string, limit: number = 50): Array<{ id: string; event_type: string; payload_json: string; created_at: string }> {
-  const db = getDb();
-  return db.prepare(
-    'SELECT id, event_type, payload_json, created_at FROM session_events WHERE session_id = ? ORDER BY created_at DESC LIMIT ?'
-  ).all(sessionId, limit) as Array<{ id: string; event_type: string; payload_json: string; created_at: string }>;
+  return orchestratorSessionsDb.getSessionEvents(sessionId, limit);
 }
 
 export function bindExternalSessionId(localSessionId: string, externalSessionId: string): void {
@@ -904,10 +785,7 @@ function findMaterializedChildSessionLookup(
   parentSessionId: string,
   sourceToolId: string,
 ): MaterializedChildLookup | undefined {
-  const db = getDb();
-  const rows = db.prepare(
-    "SELECT payload_json FROM session_events WHERE session_id = ? AND event_type = 'child_session_created' ORDER BY created_at DESC"
-  ).all(parentSessionId) as Array<{ payload_json: string }>;
+  const rows = orchestratorSessionsDb.getToolCallPayloadsByParentSessionId(parentSessionId);
 
   for (const row of rows) {
     try {
@@ -1160,8 +1038,7 @@ export function materializeChildSessionFromTool(
     goal_and_constraints: goalAndConstraints,
   });
 
-  const db = getDb();
-  insertEvent(db, parentSession.id, null, 'child_session_created', {
+  orchestratorSessionsDb.recordChildSessionCreated(parentSession.id, {
     child_id: session.id,
     child_type: childType,
     source_tool_id: sourceToolId,
@@ -1273,8 +1150,7 @@ export function bindChildRuntimeFromTool(
   });
   console.log('[DEBUG][orchestrator] bindChildRuntime: BOUND child.id=%s runtime_session_id=%s', child.id, runtimeSessionId);
 
-  const db = getDb();
-  insertEvent(db, child.id, null, 'status_changed', {
+  orchestratorSessionsDb.recordRuntimeBindEvent(child.id, {
     runtime_session_id: runtimeSessionId,
     bound_from_parent_tool: true,
     parent_session_id: parentSessionId,

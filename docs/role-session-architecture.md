@@ -557,3 +557,27 @@ This separation means the frontend cannot rely on project data to know whether o
 2. **New session page**: `selectedProject !== null` but `selectedSession === null` → ChatInterface renders its "start new chat" UI. This is the legacy "new session" entry point.
 
 The project-click fix above deliberately routes to state 1 (global empty) when orchestrator roots are absent, rather than leaving the user on state 2.
+
+---
+
+## DB Access Separation (2026-05-27)
+
+### Problem
+
+`orchestrator.service.ts` (1285 lines) contains ~81 direct database operations spanning four tables: `orchestrator_sessions`, `project_knowledge`, `worker_task_specs`, and `session_events`. The service uses a local `getDb()` wrapper and inline SQL throughout, while the rest of the codebase follows a repository pattern under `server/modules/database/repositories/`.
+
+### Target state
+
+Orchestrator DB operations should live in a dedicated repository `orchestrator-sessions.db.ts`, following the same `export const xyzDb = { ... }` pattern used by `projects.db.ts` and `sessions.db.ts`. The service layer should call repository methods and focus on business logic (validation, tree building, sorting, auto-run orchestration).
+
+### Repository scope
+
+The new repository should cover:
+
+- `orchestrator_sessions` CRUD, tree queries, status updates, runtime binding, descendant config sync
+- `project_knowledge` read/write
+- `worker_task_specs` create/query
+- `session_events` record/query
+- Tool call payload queries
+
+Existing imports from `projectsDb` (e.g., `getProjectRoleModelConfig`) stay in the service layer.
