@@ -11,6 +11,13 @@ const ROLE_ICONS: Record<SessionType, typeof User> = {
   ops: Wrench,
 };
 
+const ROLE_LABELS: Record<SessionType, string> = {
+  tech_lead: 'Tech Lead',
+  feature_lead: 'Feature Lead',
+  worker: 'Subagent',
+  ops: 'Ops',
+};
+
 const RUN_STATUS_COLORS: Record<string, string> = {
   idle: 'bg-gray-400',
   queued: 'bg-yellow-400',
@@ -191,6 +198,7 @@ function SessionTreeNodeItem({
         )}
         <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <span className="flex-1 truncate">{node.title}</span>
+        <span className="shrink-0 text-[10px] text-muted-foreground">{ROLE_LABELS[node.type]}</span>
         {!node.provider && <span className="ml-1 shrink-0 text-[10px] text-yellow-500">未配置</span>}
         <span className={cn('h-2 w-2 rounded-full shrink-0', RUN_STATUS_COLORS[node.run_status] || 'bg-gray-400')} />
       </div>

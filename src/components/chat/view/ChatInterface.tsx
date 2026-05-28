@@ -314,7 +314,7 @@ function ChatInterface({
       <div className="flex h-full flex-col">
         {(selectedSession as any)?.type === 'worker' && taskSpec && (
           <div className="mx-4 mt-2 p-3 rounded border bg-muted/30 text-xs">
-            <div className="font-semibold mb-1">任务单：{taskSpec.title}</div>
+            <div className="font-semibold mb-1">子代理任务：{taskSpec.title}</div>
             <div className="text-muted-foreground">目标：{taskSpec.objective}</div>
             <div className="text-muted-foreground">范围：{taskSpec.scope}</div>
           </div>

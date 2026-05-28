@@ -1,15 +1,13 @@
 import type { LLMProvider } from '@/shared/types.js';
 
-export type ProjectRoleType = 'tech_lead' | 'feature_lead' | 'worker' | 'ops';
-
+export type ProjectRoleType = 'tech_lead' | 'feature_lead' | 'ops';
 export type ProjectRoleModelConfigEntry = {
   provider: LLMProvider;
   model: string;
 };
-
 export type ProjectRoleModelConfig = Record<ProjectRoleType, ProjectRoleModelConfigEntry>;
 
-export const PROJECT_ROLE_TYPES: ProjectRoleType[] = ['tech_lead', 'feature_lead', 'worker', 'ops'];
+export const PROJECT_ROLE_TYPES: ProjectRoleType[] = ['tech_lead', 'feature_lead', 'ops'];
 
 const DEFAULT_PROJECT_ROLE_MODEL_CONFIG: ProjectRoleModelConfig = {
   tech_lead: {
@@ -19,10 +17,6 @@ const DEFAULT_PROJECT_ROLE_MODEL_CONFIG: ProjectRoleModelConfig = {
   feature_lead: {
     provider: 'codex',
     model: 'gpt-5.4',
-  },
-  worker: {
-    provider: 'codex',
-    model: 'gpt-5.3',
   },
   ops: {
     provider: 'codex',
@@ -40,7 +34,6 @@ function cloneDefaults(): ProjectRoleModelConfig {
   return {
     tech_lead: { ...DEFAULT_PROJECT_ROLE_MODEL_CONFIG.tech_lead },
     feature_lead: { ...DEFAULT_PROJECT_ROLE_MODEL_CONFIG.feature_lead },
-    worker: { ...DEFAULT_PROJECT_ROLE_MODEL_CONFIG.worker },
     ops: { ...DEFAULT_PROJECT_ROLE_MODEL_CONFIG.ops },
   };
 }

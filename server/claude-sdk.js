@@ -25,7 +25,9 @@ import {
   bindChildRuntimeFromTool,
   bindExternalSessionId,
   finalizeOrchestratorRun,
+  handleOrchestratorToolCall,
   materializeAndBindChildSessionFromTool,
+  tryParseOrchestratorStructuredAction,
   prepareOrchestratorCommand,
 } from './modules/orchestrator/index.js';
 import { resolveClaudeCodeExecutablePath } from './shared/claude-cli-path.js';
@@ -44,6 +46,40 @@ const pendingToolApprovals = new Map();
 const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 55000;
 
 const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion', 'ExitPlanMode']);
+function createOrchestratorToolUseMessage(action, sessionId) {
+  const toolName = action.type === 'lookup_role' ? 'orchestrator_lookup_role' : 'orchestrator_create_role';
+  const toolInput = action.type === 'lookup_role'
+    ? { role_type: action.role_type }
+    : {
+        role_type: action.role_type,
+        title: action.title,
+        goal: action.goal,
+        ...(action.constraints ? { constraints: action.constraints } : {}),
+      };
+
+  return createNormalizedMessage({
+    kind: 'tool_use',
+    toolName,
+    toolInput,
+    toolId: `orchestrator_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    sessionId,
+    provider: 'claude',
+  });
+}
+
+function createOrchestratorToolResultMessage(toolUseMessage, result, sessionId) {
+  return createNormalizedMessage({
+    kind: 'tool_result',
+    toolId: toolUseMessage.toolId,
+    toolResult: {
+      content: JSON.stringify(result),
+      isError: false,
+      toolUseResult: result,
+    },
+    sessionId,
+    provider: 'claude',
+  });
+}
 
 function createRequestId() {
   if (typeof crypto.randomUUID === 'function') {
@@ -696,6 +732,10 @@ async function queryClaudeSDK(command, options = {}, ws) {
         if (transformedMessage.parentToolUseId && !msg.parentToolUseId) {
           msg.parentToolUseId = transformedMessage.parentToolUseId;
         }
+        if (options.orchestratorSessionId && (msg.kind === 'text' || msg.kind === 'stream_delta') && typeof msg.content === 'string') {
+          bufferedAssistantText += msg.content;
+          continue;
+        }
         if (options.orchestratorSessionId && msg.kind === 'tool_use') {
           console.log("[DEBUG][claude-handler] -> materializeAndBindChildSessionFromTool toolName=" + msg.toolName + " toolId=" + msg.toolId);
           materializeAndBindChildSessionFromTool(options.orchestratorSessionId, {
@@ -728,6 +768,34 @@ async function queryClaudeSDK(command, options = {}, ws) {
         if (tokenBudgetData) {
           ws.send(createNormalizedMessage({ kind: 'status', text: 'token_budget', tokenBudget: tokenBudgetData, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
         }
+      }
+    }
+
+    if (options.orchestratorSessionId) {
+      const sid = capturedSessionId || sessionId || null;
+      const action = tryParseOrchestratorStructuredAction(bufferedAssistantText);
+      if (!action || action.type === 'message') {
+        const content = action?.message || bufferedAssistantText.trim();
+        if (content) {
+          ws.send(createNormalizedMessage({ kind: 'text', role: 'assistant', content, sessionId: sid, provider: 'claude' }));
+        }
+      } else {
+        const toolUseMessage = createOrchestratorToolUseMessage(action, sid);
+        ws.send(toolUseMessage);
+        const toolInput = action.type === 'lookup_role'
+          ? { role_type: action.role_type }
+          : {
+              role_type: action.role_type,
+              title: action.title,
+              goal: action.goal,
+              ...(action.constraints ? { constraints: action.constraints } : {}),
+            };
+        const toolResult = await handleOrchestratorToolCall(
+          action.type === 'lookup_role' ? 'orchestrator_lookup_role' : 'orchestrator_create_role',
+          toolInput,
+          options.orchestratorSessionId,
+        );
+        ws.send(createOrchestratorToolResultMessage(toolUseMessage, toolResult.result, sid));
       }
     }
 
@@ -891,3 +959,4 @@ export {
   getPendingApprovalsForSession,
   reconnectSessionWriter
 };
+    let bufferedAssistantText = '';

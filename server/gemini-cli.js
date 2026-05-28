@@ -7,7 +7,13 @@ import crossSpawn from 'cross-spawn';
 
 import sessionManager from './sessionManager.js';
 import GeminiResponseHandler from './gemini-response-handler.js';
-import { bindExternalSessionId, finalizeOrchestratorRun, prepareOrchestratorCommand } from './modules/orchestrator/index.js';
+import {
+    bindExternalSessionId,
+    finalizeOrchestratorRun,
+    handleOrchestratorToolCall,
+    tryParseOrchestratorStructuredAction,
+    prepareOrchestratorCommand,
+} from './modules/orchestrator/index.js';
 import { notifyRunFailed, notifyRunStopped } from './services/notification-orchestrator.js';
 import { providerAuthService } from './modules/providers/index.js';
 import { createNormalizedMessage } from './shared/utils.js';
@@ -16,6 +22,41 @@ import { createNormalizedMessage } from './shared/utils.js';
 const spawnFunction = process.platform === 'win32' ? crossSpawn : spawn;
 
 let activeGeminiProcesses = new Map(); // Track active processes by session ID
+
+function createOrchestratorToolUseMessage(action, sessionId) {
+    const toolName = action.type === 'lookup_role' ? 'orchestrator_lookup_role' : 'orchestrator_create_role';
+    const toolInput = action.type === 'lookup_role'
+        ? { role_type: action.role_type }
+        : {
+            role_type: action.role_type,
+            title: action.title,
+            goal: action.goal,
+            ...(action.constraints ? { constraints: action.constraints } : {}),
+        };
+
+    return createNormalizedMessage({
+        kind: 'tool_use',
+        toolName,
+        toolInput,
+        toolId: `orchestrator_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        sessionId,
+        provider: 'gemini',
+    });
+}
+
+function createOrchestratorToolResultMessage(toolUseMessage, result, sessionId) {
+    return createNormalizedMessage({
+        kind: 'tool_result',
+        toolId: toolUseMessage.toolId,
+        toolResult: {
+            content: JSON.stringify(result),
+            isError: false,
+            toolUseResult: result,
+        },
+        sessionId,
+        provider: 'gemini',
+    });
+}
 
 function mapGeminiExitCodeToMessage(exitCode) {
     switch (exitCode) {
@@ -124,6 +165,7 @@ async function spawnGemini(command, options = {}, ws) {
     let capturedSessionId = sessionId; // Track session ID throughout the process
     let sessionCreatedSent = false; // Track if we've already sent session-created event
     let assistantBlocks = []; // Accumulate the full response blocks including tools
+    let bufferedAssistantText = '';
     const initialCommand = options.orchestratorSessionId
         ? prepareOrchestratorCommand(options.orchestratorSessionId, command)
         : command;
@@ -364,6 +406,9 @@ async function spawnGemini(command, options = {}, ws) {
             responseHandler = new GeminiResponseHandler(ws, {
                 orchestratorSessionId: options.orchestratorSessionId,
                 onContentFragment: (content) => {
+                    if (options.orchestratorSessionId && content) {
+                        bufferedAssistantText += content;
+                    }
                     if (assistantBlocks.length > 0 && assistantBlocks[assistantBlocks.length - 1].type === 'text') {
                         assistantBlocks[assistantBlocks.length - 1].text += content;
                     } else {
@@ -491,6 +536,34 @@ async function spawnGemini(command, options = {}, ws) {
             // Save assistant response to session if we have one
             if (finalSessionId && assistantBlocks.length > 0) {
                 sessionManager.addMessage(finalSessionId, 'assistant', assistantBlocks);
+            }
+
+            if (options.orchestratorSessionId) {
+                const sid = typeof ws.getSessionId === 'function' ? ws.getSessionId() : finalSessionId;
+                const action = tryParseOrchestratorStructuredAction(bufferedAssistantText);
+                if (!action || action.type === 'message') {
+                    const content = action?.message || bufferedAssistantText.trim();
+                    if (content) {
+                        ws.send(createNormalizedMessage({ kind: 'text', role: 'assistant', content, sessionId: sid, provider: 'gemini' }));
+                    }
+                } else {
+                    const toolUseMessage = createOrchestratorToolUseMessage(action, sid);
+                    ws.send(toolUseMessage);
+                    const toolInput = action.type === 'lookup_role'
+                        ? { role_type: action.role_type }
+                        : {
+                            role_type: action.role_type,
+                            title: action.title,
+                            goal: action.goal,
+                            ...(action.constraints ? { constraints: action.constraints } : {}),
+                        };
+                    const toolResult = await handleOrchestratorToolCall(
+                        action.type === 'lookup_role' ? 'orchestrator_lookup_role' : 'orchestrator_create_role',
+                        toolInput,
+                        options.orchestratorSessionId,
+                    );
+                    ws.send(createOrchestratorToolResultMessage(toolUseMessage, toolResult.result, sid));
+                }
             }
 
             ws.send(createNormalizedMessage({ kind: 'complete', exitCode: code, isNewSession: !sessionId && !!command, sessionId: finalSessionId, provider: 'gemini' }));

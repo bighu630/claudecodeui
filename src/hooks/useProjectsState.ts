@@ -3,6 +3,7 @@ import type { NavigateFunction } from 'react-router-dom';
 
 import { api, authenticatedFetch } from '../utils/api';
 import {
+  getSessionOrchestratorId,
   getSessionRouteId,
   getSessionRuntimeId,
   isOrchestratorSession,
@@ -380,6 +381,47 @@ export function useProjectsState({
     setShowSettings(true);
   }, []);
 
+  const refreshSelectedOrchestratorSession = useCallback(
+    async (orchestratorSessionId: string) => {
+      if (!orchestratorSessionId) {
+        return;
+      }
+
+      const response = await authenticatedFetch(
+        `/api/orchestrator/sessions/${encodeURIComponent(orchestratorSessionId)}`,
+      );
+      if (!response.ok) {
+        return;
+      }
+
+      const payload = (await response.json()) as { session?: OrchestratorSession };
+      const refreshedSession = payload.session;
+      if (!refreshedSession) {
+        return;
+      }
+
+      const refreshedProject = projects.find((project) => project.projectId === refreshedSession.project_id);
+      if (refreshedProject && selectedProject?.projectId !== refreshedProject.projectId) {
+        setSelectedProject(refreshedProject);
+      }
+
+      const normalizedSession = normalizeOrchestratorSession(
+        refreshedSession,
+        refreshedProject?.projectId || selectedSession?.__projectId || refreshedSession.project_id,
+      );
+
+      if (serialize(normalizedSession) !== serialize(selectedSession)) {
+        setSelectedSession(normalizedSession);
+      }
+
+      const routeSessionId = getSessionRouteId(normalizedSession);
+      if (routeSessionId && routeSessionId !== sessionId) {
+        navigate(`/session/${routeSessionId}`, { replace: true });
+      }
+    },
+    [navigate, projects, selectedProject?.projectId, selectedSession, sessionId],
+  );
+
   useEffect(() => {
     void fetchProjects();
   }, [fetchProjects]);
@@ -439,6 +481,10 @@ export function useProjectsState({
 
     const selectedRuntimeSessionId = getSessionRuntimeId(selectedSession);
 
+    if (selectedSession && isOrchestratorSession(selectedSession) && !selectedRuntimeSessionId) {
+      void refreshSelectedOrchestratorSession(getSessionOrchestratorId(selectedSession) || selectedSession.id);
+    }
+
     if (projectsMessage.updatedSessionId && selectedSession && selectedProject) {
       if (
         projectsMessage.updatedSessionId === selectedSession.id
@@ -497,7 +543,48 @@ export function useProjectsState({
         setSelectedSession(null);
       }
     }
-  }, [latestMessage, selectedProject, selectedSession, activeSessions, projects]);
+  }, [latestMessage, selectedProject, selectedSession, activeSessions, projects, refreshSelectedOrchestratorSession]);
+
+  useEffect(() => {
+    if (!latestMessage || !selectedSession || !isOrchestratorSession(selectedSession)) {
+      return;
+    }
+
+    const kind = typeof (latestMessage as { kind?: unknown }).kind === 'string'
+      ? (latestMessage as { kind: string }).kind
+      : '';
+    if (kind !== 'session_created') {
+      return;
+    }
+
+    const newSessionId = typeof (latestMessage as { newSessionId?: unknown }).newSessionId === 'string'
+      ? (latestMessage as { newSessionId: string }).newSessionId.trim()
+      : '';
+    if (!newSessionId) {
+      return;
+    }
+
+    const orchestratorSessionId = getSessionOrchestratorId(selectedSession);
+    if (!orchestratorSessionId) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        if (!cancelled) {
+          await refreshSelectedOrchestratorSession(orchestratorSessionId);
+        }
+      } catch (error) {
+        console.error('Error refreshing orchestrator session after session_created:', error);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [latestMessage, refreshSelectedOrchestratorSession, selectedSession]);
 
   useEffect(() => {
     return () => {

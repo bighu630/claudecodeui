@@ -12,6 +12,7 @@ import {
   createSession,
   ensureProjectOrchestratorBootstrap,
   finalizeOrchestratorRun,
+  handleOrchestratorToolCall,
   getProjectKnowledge,
   getSession,
   getSessionByRuntimeSessionId,
@@ -107,20 +108,13 @@ test('createSession enforces orchestrator role derivation rules', async () => {
       },
     );
 
-    assert.throws(
-      () =>
-        createSession({
-          project_id: projectId,
-          parent_id: ops.id,
-          type: 'worker',
-          title: 'illegal worker under ops',
-        }),
-      (error: unknown) => {
-        assert.ok(error instanceof AppError);
-        assert.equal(error.code, 'ORCHESTRATOR_INVALID_DERIVATION');
-        return true;
-      },
-    );
+    const opsSubagent = createSession({
+      project_id: projectId,
+      parent_id: ops.id,
+      type: 'worker',
+      title: 'ops subagent',
+    });
+    assert.equal(opsSubagent.parent_id, ops.id);
 
     const featureLead = createSession({
       project_id: projectId,
@@ -198,7 +192,7 @@ test('materializeChildSessionFromTool and bindChildRuntimeFromTool bridge namesp
     assert.ok(worker);
     assert.equal(worker.type, 'worker');
     assert.equal(worker.provider, 'codex');
-    assert.equal(worker.model, 'gpt-5.3');
+    assert.equal(worker.model, 'gpt-5.4');
     assert.ok(getTaskSpec(worker.id));
 
     const ignoredBinding = bindChildRuntimeFromTool(featureLead.id, {
@@ -363,7 +357,7 @@ test('materializeAndBindChildSessionFromTool writes runtime_session_id immediate
   });
 });
 
-test('materializeAndBindChildSessionFromTool accepts functions.spawn_agent tool names and binds direct agent ids for tech_lead-created feature_leads', async () => {
+test('materializeAndBindChildSessionFromTool accepts functions.spawn_agent tool names and binds direct agent ids for tech_lead-created subagents', async () => {
   await withIsolatedDatabase(() => {
     const projectId = createProjectFixture('/workspace/functions-spawn-agent-project');
     const { techLead } = ensureProjectOrchestratorBootstrap({
@@ -384,7 +378,7 @@ test('materializeAndBindChildSessionFromTool accepts functions.spawn_agent tool 
     });
 
     assert.ok(featureLead);
-    assert.equal(featureLead.type, 'feature_lead');
+    assert.equal(featureLead.type, 'worker');
     assert.equal(featureLead.runtime_session_id, 'feature-runtime-functions-1');
     assert.equal(getSessionByRuntimeSessionId('feature-runtime-functions-1')?.id, featureLead.id);
 
@@ -397,7 +391,7 @@ test('materializeAndBindChildSessionFromTool accepts functions.spawn_agent tool 
   });
 });
 
-test('materializeChildSessionFromTool treats collab_tool_call as a materializable delegation for tech_lead-created feature_leads', async () => {
+test('materializeChildSessionFromTool treats collab_tool_call as a materializable delegation for tech_lead-created subagents by default', async () => {
   await withIsolatedDatabase(() => {
     const projectId = createProjectFixture('/workspace/collab-tool-feature-project');
     const { techLead } = ensureProjectOrchestratorBootstrap({
@@ -410,6 +404,36 @@ test('materializeChildSessionFromTool treats collab_tool_call as a materializabl
       toolId: 'tool-feature-collab-1',
       toolInput: {
         message: 'You are the current project feature_lead. Implement the delegation bridge.',
+      },
+    });
+
+    assert.ok(featureLead);
+    assert.equal(featureLead.type, 'worker');
+    assert.equal(featureLead.runtime_session_id, null);
+
+    const tree = getSessionTree(projectId);
+    const techLeadNode = tree.find((node) => node.id === techLead.id);
+    assert.ok(techLeadNode);
+    const featureLeadNode = techLeadNode.children.find((node) => node.id === featureLead.id);
+    assert.ok(featureLeadNode);
+    assert.equal(featureLeadNode.type, 'worker');
+  });
+});
+
+test('materializeChildSessionFromTool creates a formal feature_lead when delegation payload explicitly asks for that role', async () => {
+  await withIsolatedDatabase(() => {
+    const projectId = createProjectFixture('/workspace/explicit-feature-role-project');
+    const { techLead } = ensureProjectOrchestratorBootstrap({
+      projectId,
+      workspacePath: '/workspace/explicit-feature-role-project',
+    });
+
+    const featureLead = materializeChildSessionFromTool(techLead.id, {
+      toolName: 'functions.spawn_agent',
+      toolId: 'tool-explicit-feature-role-1',
+      toolInput: {
+        message: 'Own the feature implementation end-to-end.',
+        session_role: 'feature_lead',
       },
     });
 
@@ -541,6 +565,107 @@ test('materializeAndBindChildSessionFromTool auto-runs child sessions and only e
       assert.equal(completedSession.run_status, 'idle');
       assert.equal(completedSession.last_run_summary, 'child auto-run completed');
       assert.equal(completedSession.runtime_session_id, 'feature-autorun-runtime-1');
+    } finally {
+      registerChildSessionAutoRunExecutor(null);
+    }
+  });
+});
+
+test('handleOrchestratorToolCall returns feature_lead prompt text for lookup_role', async () => {
+  await withIsolatedDatabase(async () => {
+    const projectId = createProjectFixture('/workspace/orchestrator-tool-lookup-project');
+    const { techLead } = ensureProjectOrchestratorBootstrap({
+      projectId,
+      workspacePath: '/workspace/orchestrator-tool-lookup-project',
+    });
+
+    const result = await handleOrchestratorToolCall(
+      'orchestrator_lookup_role',
+      { role_type: 'feature_lead' },
+      techLead.id,
+    );
+
+    assert.equal(result.requires_response, true);
+    assert.equal(result.result.role_type, 'feature_lead');
+    assert.match(String(result.result.prompt || ''), /你是当前项目的 feature_lead/);
+  });
+});
+
+test('handleOrchestratorToolCall creates and auto-runs a feature_lead session', async () => {
+  await withIsolatedDatabase(async () => {
+    const projectId = createProjectFixture('/workspace/orchestrator-tool-create-project');
+    const { techLead } = ensureProjectOrchestratorBootstrap({
+      projectId,
+      workspacePath: '/workspace/orchestrator-tool-create-project',
+    });
+
+    let seenChildSessionId = '';
+
+    registerChildSessionAutoRunExecutor(async ({ session }) => {
+      seenChildSessionId = session.id;
+      bindExternalSessionId(session.id, 'feature-runtime-tool-create-1');
+      finalizeOrchestratorRun(session.id, {
+        success: true,
+        runSummary: 'tool-created feature lead completed',
+      });
+    });
+
+    try {
+      const result = await handleOrchestratorToolCall(
+        'orchestrator_create_role',
+        {
+          role_type: 'feature_lead',
+          title: 'Implement orchestrator tools',
+          goal: 'Land provider-aware orchestrator tool calling',
+          constraints: 'Keep worker as internal subagent compatibility only',
+        },
+        techLead.id,
+      );
+
+      assert.equal(result.requires_response, true);
+      assert.equal(result.result.role_type, 'feature_lead');
+      assert.equal(result.result.runtime_session_id, 'feature-runtime-tool-create-1');
+      assert.equal(typeof result.result.session_id, 'string');
+      assert.equal(seenChildSessionId, result.result.session_id);
+
+      const child = getSession(String(result.result.session_id));
+      assert.ok(child);
+      assert.equal(child.type, 'feature_lead');
+      assert.equal(child.parent_id, techLead.id);
+      assert.equal(child.runtime_session_id, 'feature-runtime-tool-create-1');
+    } finally {
+      registerChildSessionAutoRunExecutor(null);
+    }
+  });
+});
+
+test('handleOrchestratorToolCall returns timeout when auto-run does not bind runtime session id in time', async () => {
+  await withIsolatedDatabase(async () => {
+    const projectId = createProjectFixture('/workspace/orchestrator-tool-timeout-project');
+    const { techLead } = ensureProjectOrchestratorBootstrap({
+      projectId,
+      workspacePath: '/workspace/orchestrator-tool-timeout-project',
+    });
+
+    registerChildSessionAutoRunExecutor(async () => {
+      // Intentionally do not bind runtime_session_id.
+    });
+
+    try {
+      const result = await handleOrchestratorToolCall(
+        'orchestrator_create_role',
+        {
+          role_type: 'feature_lead',
+          title: 'Timeout case',
+          goal: 'Verify timeout behavior',
+        },
+        techLead.id,
+      );
+
+      assert.equal(result.requires_response, true);
+      assert.equal(result.result.role_type, 'feature_lead');
+      assert.equal(result.result.status, 'timeout');
+      assert.equal(typeof result.result.session_id, 'string');
     } finally {
       registerChildSessionAutoRunExecutor(null);
     }

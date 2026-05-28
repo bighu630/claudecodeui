@@ -17,10 +17,11 @@ import { Codex } from '@openai/codex-sdk';
 
 import { notifyRunFailed, notifyRunStopped } from './services/notification-orchestrator.js';
 import {
-  bindChildRuntimeFromTool,
   bindExternalSessionId,
   finalizeOrchestratorRun,
-  materializeAndBindChildSessionFromTool,
+  handleOrchestratorToolCall,
+  ORCHESTRATOR_ACTION_SCHEMA,
+  tryParseOrchestratorStructuredAction,
   prepareOrchestratorCommand,
 } from './modules/orchestrator/index.js';
 import { providerAuthService, sessionsService } from './modules/providers/index.js';
@@ -29,143 +30,9 @@ import { createNormalizedMessage } from './shared/utils.js';
 // Track active sessions
 const activeCodexSessions = new Map();
 
-/**
- * Transform Codex SDK event to WebSocket message format
- * @param {object} event - SDK event
- * @returns {object} - Transformed event for WebSocket
- */
-function transformCodexEvent(event) {
-  // Map SDK event types to a consistent format
-  switch (event.type) {
-    case 'item.started':
-    case 'item.updated':
-    case 'item.completed':
-      const item = event.item;
-      if (!item) {
-        return { type: event.type, item: null };
-      }
-
-      // Transform based on item type
-      switch (item.type) {
-        case 'agent_message':
-          return {
-            type: 'item',
-            itemType: 'agent_message',
-            message: {
-              role: 'assistant',
-              content: item.text
-            }
-          };
-
-        case 'reasoning':
-          return {
-            type: 'item',
-            itemType: 'reasoning',
-            message: {
-              role: 'assistant',
-              content: item.text,
-              isReasoning: true
-            }
-          };
-
-        case 'command_execution':
-          return {
-            type: 'item',
-            itemType: 'command_execution',
-            command: item.command,
-            output: item.aggregated_output,
-            exitCode: item.exit_code,
-            status: item.status
-          };
-
-        case 'file_change':
-          return {
-            type: 'item',
-            itemType: 'file_change',
-            changes: item.changes,
-            status: item.status
-          };
-
-        case 'mcp_tool_call':
-          return {
-            type: 'item',
-            itemType: 'mcp_tool_call',
-            server: item.server,
-            tool: item.tool,
-            arguments: item.arguments,
-            result: item.result,
-            error: item.error,
-            status: item.status
-          };
-
-        case 'web_search':
-          return {
-            type: 'item',
-            itemType: 'web_search',
-            query: item.query
-          };
-
-        case 'todo_list':
-          return {
-            type: 'item',
-            itemType: 'todo_list',
-            items: item.items
-          };
-
-        case 'error':
-          return {
-            type: 'item',
-            itemType: 'error',
-            message: {
-              role: 'error',
-              content: item.message
-            }
-          };
-
-        default:
-          console.log('[DEBUG][codex-transform] UNKNOWN item.type="%s" falling through to default case', item.type);
-          return {
-            type: 'item',
-            itemType: item.type,
-            item: item
-          };
-      }
-
-    case 'turn.started':
-      return {
-        type: 'turn_started'
-      };
-
-    case 'turn.completed':
-      return {
-        type: 'turn_complete',
-        usage: event.usage
-      };
-
-    case 'turn.failed':
-      return {
-        type: 'turn_failed',
-        error: event.error
-      };
-
-    case 'thread.started':
-      return {
-        type: 'thread_started',
-        threadId: event.thread_id || event.id
-      };
-
-    case 'error':
-      return {
-        type: 'error',
-        message: event.message
-      };
-
-    default:
-      return {
-        type: event.type,
-        data: event
-      };
-  }
+function logCodexOrchestrator(message, details = {}) {
+  const payload = Object.keys(details).length > 0 ? ` ${JSON.stringify(details)}` : '';
+  console.log(`[codex][orchestrator] ${message}${payload}`);
 }
 
 /**
@@ -192,6 +59,85 @@ function mapPermissionModeToCodexOptions(permissionMode) {
         approvalPolicy: 'untrusted'
       };
   }
+}
+
+function createOrchestratorToolUseMessage(action, sessionId) {
+  const toolName = action.type === 'lookup_role' ? 'orchestrator_lookup_role' : 'orchestrator_create_role';
+  const toolInput = action.type === 'lookup_role'
+    ? { role_type: action.role_type }
+    : {
+        role_type: action.role_type,
+        title: action.title,
+        goal: action.goal,
+        ...(action.constraints ? { constraints: action.constraints } : {}),
+      };
+
+  return createNormalizedMessage({
+    kind: 'tool_use',
+    toolName,
+    toolInput,
+    toolId: `orchestrator_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    sessionId,
+    provider: 'codex',
+  });
+}
+
+function createOrchestratorToolResultMessage(toolUseMessage, result, sessionId) {
+  return createNormalizedMessage({
+    kind: 'tool_result',
+    toolId: toolUseMessage.toolId,
+    toolResult: {
+      content: JSON.stringify(result),
+      isError: false,
+      toolUseResult: result,
+    },
+    sessionId,
+    provider: 'codex',
+  });
+}
+
+export async function streamCodexTurn(thread, input, turnOptions, callbacks = {}) {
+  const streamedTurn = await thread.runStreamed(input, turnOptions);
+  const items = [];
+  let finalResponse = '';
+  let usage = null;
+
+  for await (const event of streamedTurn.events) {
+    if (event.type === 'thread.started') {
+      callbacks.onThreadStarted?.(event.thread_id);
+      continue;
+    }
+
+    if (event.type === 'item.completed') {
+      items.push(event.item);
+      if (event.item.type === 'agent_message' && typeof event.item.text === 'string') {
+        finalResponse = event.item.text;
+      }
+      callbacks.onItemCompleted?.(event.item);
+      continue;
+    }
+
+    if (event.type === 'turn.completed') {
+      usage = event.usage;
+      continue;
+    }
+
+    if (event.type === 'turn.failed') {
+      throw event.error instanceof Error
+        ? event.error
+        : new Error(event.error?.message || 'Codex turn failed');
+    }
+
+    if (event.type === 'error') {
+      throw new Error(event.message);
+    }
+  }
+
+  return {
+    items,
+    finalResponse,
+    usage,
+  };
 }
 
 /**
@@ -225,8 +171,9 @@ export async function queryCodex(command, options = {}, ws) {
   }
 
   try {
+    const codexOptions = {};
     // Initialize Codex SDK
-    codex = new Codex();
+    codex = new Codex(codexOptions);
 
     // Thread options with sandbox and approval settings
     const threadOptions = {
@@ -262,26 +209,30 @@ export async function queryCodex(command, options = {}, ws) {
       registerSession(capturedSessionId);
     }
 
-    // ── Orchestrator: inject session context only on first provider-thread startup ──
     const resolvedCommand = options.orchestratorSessionId
       ? prepareOrchestratorCommand(options.orchestratorSessionId, command)
       : command;
+    const turnOptions = {
+      signal: abortController.signal,
+      ...(options.orchestratorSessionId ? { outputSchema: ORCHESTRATOR_ACTION_SCHEMA } : {}),
+    };
 
-    // Execute with streaming
-    const streamedTurn = await thread.runStreamed(resolvedCommand, {
-      signal: abortController.signal
-    });
+    const turn = await streamCodexTurn(
+      thread,
+      resolvedCommand,
+      turnOptions,
+      {
+        onThreadStarted: (threadId) => {
+          if (capturedSessionId || !threadId) {
+            return;
+          }
 
-    for await (const event of streamedTurn.events) {
-      // Capture thread/session id lazily from the stream (Codex emits this asynchronously).
-      if (event.type === 'thread.started') {
-        const discoveredSessionId = event.thread_id || event.id || null;
-        if (discoveredSessionId && options.orchestratorSessionId) {
-          bindExternalSessionId(options.orchestratorSessionId, discoveredSessionId);
-        }
-        if (discoveredSessionId && !capturedSessionId) {
-          capturedSessionId = discoveredSessionId;
+          capturedSessionId = threadId;
           registerSession(capturedSessionId);
+
+          if (options.orchestratorSessionId) {
+            bindExternalSessionId(options.orchestratorSessionId, capturedSessionId);
+          }
 
           if (ws.setSessionId && typeof ws.setSessionId === 'function') {
             ws.setSessionId(capturedSessionId);
@@ -291,73 +242,96 @@ export async function queryCodex(command, options = {}, ws) {
             sessionCreatedSent = true;
             sendMessage(ws, createNormalizedMessage({ kind: 'session_created', newSessionId: capturedSessionId, sessionId: capturedSessionId, provider: 'codex' }));
           }
-        }
-      }
+        },
+        onItemCompleted: (item) => {
+          const normalizedSessionId = capturedSessionId || sessionId || null;
+          if (options.orchestratorSessionId && item.type === 'agent_message') {
+            return;
+          }
 
-      // Check if session was aborted
-      if (abortController.signal.aborted) {
-        break;
-      }
-      if (capturedSessionId) {
-        const session = activeCodexSessions.get(capturedSessionId);
-        if (session?.status === 'aborted') {
-          break;
-        }
-      }
+          const normalizedMsgs = sessionsService.normalizeMessage('codex', {
+            type: 'item.completed',
+            item,
+          }, normalizedSessionId);
 
-      if (event.type === 'item.started' || event.type === 'item.updated') {
-        continue;
-      }
+          for (const msg of normalizedMsgs) {
+            if (options.orchestratorSessionId && msg.kind === 'tool_use') {
+              console.log("[DEBUG][codex-handler] -> materializeAndBindChildSessionFromTool toolName=" + msg.toolName + " toolId=" + msg.toolId);
+              materializeAndBindChildSessionFromTool(options.orchestratorSessionId, {
+                toolName: msg.toolName,
+                toolInput: msg.toolInput,
+                toolId: msg.toolId,
+                runtimeInfo:
+                  msg.toolUseResult
+                  || item.toolUseResult
+                  || item.result
+                  || null,
+              });
+            }
+            if (options.orchestratorSessionId && msg.kind === 'tool_result') {
+              bindChildRuntimeFromTool(options.orchestratorSessionId, {
+                toolId: msg.toolId,
+                runtimeInfo: msg.toolUseResult,
+              });
+            }
+            sendMessage(ws, msg);
+          }
+        },
+      },
+    );
 
-      const transformed = transformCodexEvent(event);
-
-      // Normalize the transformed event into NormalizedMessage(s) via adapter
-      const normalizedMsgs = sessionsService.normalizeMessage('codex', transformed, capturedSessionId || sessionId || null);
-
-
-      for (const msg of normalizedMsgs) {
-        if (options.orchestratorSessionId && msg.kind === 'tool_use') {
-          materializeAndBindChildSessionFromTool(options.orchestratorSessionId, {
-            toolName: msg.toolName,
-            toolInput: msg.toolInput,
-            toolId: msg.toolId,
-            runtimeInfo:
-              msg.toolUseResult ||
-              msg.toolResult?.toolUseResult ||
-              msg.result ||
-              transformed.result ||
-              transformed.item?.result ||
-              (transformed.item?.receiver_thread_ids?.length
-                ? transformed.item.receiver_thread_ids[0]
-                : null) ||
-              null,
-          });
-        }
-        if (options.orchestratorSessionId && msg.kind === 'tool_result') {
-          bindChildRuntimeFromTool(options.orchestratorSessionId, {
-            toolId: msg.toolId,
-            runtimeInfo: msg.toolUseResult || msg.toolResult?.toolUseResult || transformed,
-          });
-        }
-        sendMessage(ws, msg);
-      }
-
-      if (event.type === 'turn.failed' && !terminalFailure) {
-        terminalFailure = event.error || new Error('Turn failed');
-        notifyRunFailed({
-          userId: ws?.userId || null,
+    const lastUsage = turn.usage;
+    const normalizedSessionId = capturedSessionId || sessionId || null;
+    if (options.orchestratorSessionId) {
+      const action = tryParseOrchestratorStructuredAction(turn.finalResponse);
+      if (!action || action.type === 'message') {
+        sendMessage(ws, createNormalizedMessage({
+          kind: 'text',
+          role: 'assistant',
+          content: action?.message || turn.finalResponse,
+          sessionId: normalizedSessionId,
           provider: 'codex',
-          sessionId: capturedSessionId || sessionId || null,
-          sessionName: sessionSummary,
-          error: terminalFailure
-        });
-      }
+        }));
+      } else {
+        const toolUseMessage = createOrchestratorToolUseMessage(action, normalizedSessionId);
+        sendMessage(ws, toolUseMessage);
 
-      // Extract and send token usage if available (normalized to match Claude format)
-      if (event.type === 'turn.completed' && event.usage) {
-        const totalTokens = (event.usage.input_tokens || 0) + (event.usage.output_tokens || 0);
-        sendMessage(ws, createNormalizedMessage({ kind: 'status', text: 'token_budget', tokenBudget: { used: totalTokens, total: 200000 }, sessionId: capturedSessionId || sessionId || null, provider: 'codex' }));
+        const toolName = action.type === 'lookup_role' ? 'orchestrator_lookup_role' : 'orchestrator_create_role';
+        const toolInput = action.type === 'lookup_role'
+          ? { role_type: action.role_type }
+          : {
+              role_type: action.role_type,
+              title: action.title,
+              goal: action.goal,
+              ...(action.constraints ? { constraints: action.constraints } : {}),
+            };
+
+        const toolCallResult = await handleOrchestratorToolCall(
+          toolName,
+          toolInput,
+          options.orchestratorSessionId,
+        );
+
+        logCodexOrchestrator('structured orchestrator action executed locally', {
+          actionType: action.type,
+          orchestratorSessionId: options.orchestratorSessionId,
+          sessionId: normalizedSessionId,
+          result: toolCallResult.result,
+        });
+
+        sendMessage(ws, createOrchestratorToolResultMessage(toolUseMessage, toolCallResult.result, normalizedSessionId));
       }
+    }
+
+    if (lastUsage) {
+      const totalTokens = (lastUsage.input_tokens || 0) + (lastUsage.output_tokens || 0);
+      sendMessage(ws, createNormalizedMessage({
+        kind: 'status',
+        text: 'token_budget',
+        tokenBudget: { used: totalTokens, total: 200000 },
+        sessionId: capturedSessionId || sessionId || null,
+        provider: 'codex',
+      }));
     }
 
     // Send completion event
@@ -385,6 +359,11 @@ export async function queryCodex(command, options = {}, ws) {
     }
 
   } catch (error) {
+    logCodexOrchestrator('queryCodex failed', {
+      orchestratorSessionId: options.orchestratorSessionId || null,
+      sessionId: capturedSessionId || sessionId || null,
+      error: error?.message || String(error),
+    });
     const session = capturedSessionId ? activeCodexSessions.get(capturedSessionId) : null;
     const wasAborted =
       session?.status === 'aborted' ||

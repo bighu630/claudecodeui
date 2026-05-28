@@ -3,7 +3,6 @@ import { Router, type Response } from 'express';
 import { AppError } from '@/shared/utils.js';
 
 import * as orch from './orchestrator.service.js';
-import { featureLeadStartupMessage } from './prompts.js';
 import type { SessionType } from './prompts.js';
 import type { OrchestratorSession } from './orchestrator.service.js';
 
@@ -66,7 +65,7 @@ router.post('/sessions', (req, res) => {
       return res.status(400).json({ error: 'Missing session title or goal_and_constraints summary' });
     }
 
-    if (parent_id && type !== 'feature_lead') {
+    if (parent_id && type !== 'feature_lead' && type !== 'worker') {
       const parent = orch.getSession(parent_id as string);
       if (!parent) return res.status(404).json({ error: 'Parent session not found' });
       if (!orch.canCreateChild(parent.type as SessionType, type as SessionType)) {
@@ -89,10 +88,7 @@ router.post('/sessions', (req, res) => {
 
     let startupMessage: string | null = null;
     if (type === 'feature_lead') {
-      startupMessage = featureLeadStartupMessage(
-        rawGoal || session.goal_and_constraints,
-        '',
-      );
+      startupMessage = orch.buildSessionInitialCommand(session);
     }
 
     res.status(201).json({ session, startupMessage });

@@ -1,10 +1,9 @@
 import { v4 as uuidv4 } from 'uuid';
 
-import { projectsDb } from '@/modules/database/index.js';
-import { orchestratorSessionsDb } from '@/modules/database/index.js';
+import { orchestratorSessionsDb, projectsDb } from '@/modules/database/index.js';
 import { AppError } from '@/shared/utils.js';
 
-import { composePrompt, featureLeadStartupMessage, workerStartupMessage, getRolePrompt } from './prompts.js';
+import { composePrompt, featureLeadStartupMessage, subagentStartupMessage, getRolePrompt } from './prompts.js';
 import type { SessionType } from './prompts.js';
 
 export type { SessionType };
@@ -75,7 +74,18 @@ type ChildSessionAutoRunParams = {
 
 type ChildSessionAutoRunExecutor = (params: ChildSessionAutoRunParams) => Promise<void>;
 
+type OrchestratorToolCallResult = {
+  requires_response: true;
+  result: Record<string, unknown>;
+};
+
+type RuntimeWaiter = {
+  resolve: (runtimeSessionId: string | null) => void;
+  timer: NodeJS.Timeout;
+};
+
 type BootstrapRootSessionType = Extract<SessionType, 'tech_lead' | 'ops'>;
+type ConfigurableRoleSessionType = Exclude<SessionType, 'worker'>;
 
 const SESSION_DEFAULTS: Record<SessionType, { interaction_mode: string; auto_run: number; run_status: string }> = {
   tech_lead: { interaction_mode: 'conversational', auto_run: 0, run_status: 'idle' },
@@ -84,9 +94,14 @@ const SESSION_DEFAULTS: Record<SessionType, { interaction_mode: string; auto_run
   ops: { interaction_mode: 'conversational', auto_run: 0, run_status: 'idle' },
 };
 
+const INTERNAL_SUBAGENT_MODEL_DEFAULT = {
+  provider: 'codex',
+  model: 'gpt-5.4',
+} as const;
+
 const DERIVATION_RULES: Record<SessionType, SessionType[]> = {
   tech_lead: ['feature_lead'],
-  feature_lead: ['worker'],
+  feature_lead: [],
   worker: [],
   ops: [],
 };
@@ -104,9 +119,19 @@ const ROOT_SESSION_GOALS: Record<BootstrapRootSessionType, { title: string; goal
 
 const MATERIALIZABLE_TOOL_NAMES = new Set(['Task', 'collab_tool_call']);
 let childSessionAutoRunExecutor: ChildSessionAutoRunExecutor | null = null;
+const runtimeSessionWaiters = new Map<string, RuntimeWaiter[]>();
+
+function logOrchestratorTooling(message: string, details?: Record<string, unknown>): void {
+  const payload = details && Object.keys(details).length > 0 ? ` ${JSON.stringify(details)}` : '';
+  console.log(`[orchestrator][tooling] ${message}${payload}`);
+}
 
 export function canCreateChild(parentType: SessionType, childType: SessionType): boolean {
   return DERIVATION_RULES[parentType]?.includes(childType) ?? false;
+}
+
+function isConfigurableRoleSessionType(type: SessionType): type is ConfigurableRoleSessionType {
+  return type !== 'worker';
 }
 
 function normalizeSessionTitle(title: string, fallback: string): string {
@@ -169,7 +194,7 @@ function validateSessionCreation(params: {
 }): void {
   if (!params.resolvedParentId) {
     if (params.type === 'worker') {
-      throw new AppError('Worker sessions must be created under a feature_lead session', {
+      throw new AppError('Leaf subagent sessions must be created under a parent session', {
         code: 'ORCHESTRATOR_INVALID_ROOT_WORKER',
         statusCode: 400,
       });
@@ -209,6 +234,10 @@ function validateSessionCreation(params: {
   }
 
   if (!canCreateChild(parentSession.type, params.type)) {
+    if (params.type === 'worker') {
+      return;
+    }
+
     throw new AppError(
       `Session type '${parentSession.type}' cannot create child of type '${params.type}'`,
       {
@@ -261,6 +290,8 @@ export function createSession(params: {
 
   if (params.type === 'feature_lead') {
     resolvedTitle = normalizeSessionTitle(params.title, params.goal_and_constraints || '需求拆分');
+  } else if (params.type === 'worker') {
+    resolvedTitle = normalizeSessionTitle(params.title, params.goal_and_constraints || '子代理任务');
   }
 
   validateSessionCreation({
@@ -269,14 +300,24 @@ export function createSession(params: {
     resolvedParentId,
   });
 
-  const rolePrompt = getRolePrompt(params.type);
+  const rolePrompt = params.type === 'worker' ? '' : getRolePrompt(params.type);
   const knowledgeSnapshot = getProjectKnowledge(params.project_id);
-  const composedSystemPrompt = composePrompt(params.type, knowledgeSnapshot, params.goal_and_constraints ?? '');
+  const composedSystemPrompt = params.type === 'worker'
+    ? ''
+    : composePrompt(params.type, knowledgeSnapshot, params.goal_and_constraints ?? '');
   const parentSession = resolvedParentId ? getSession(resolvedParentId) : undefined;
   const projectRoleModelConfig = projectsDb.getProjectRoleModelConfig(params.project_id);
-  const roleDefaults = projectRoleModelConfig[params.type];
-  const resolvedProvider = params.provider ?? roleDefaults?.provider ?? parentSession?.provider ?? null;
-  const resolvedModel = params.model ?? roleDefaults?.model ?? parentSession?.model ?? null;
+  const roleDefaults = isConfigurableRoleSessionType(params.type)
+    ? projectRoleModelConfig[params.type]
+    : null;
+  const resolvedProvider = params.provider
+    ?? roleDefaults?.provider
+    ?? parentSession?.provider
+    ?? INTERNAL_SUBAGENT_MODEL_DEFAULT.provider;
+  const resolvedModel = params.model
+    ?? roleDefaults?.model
+    ?? parentSession?.model
+    ?? INTERNAL_SUBAGENT_MODEL_DEFAULT.model;
 
   const session = orchestratorSessionsDb.createSession({
     id,
@@ -332,6 +373,51 @@ export function updateSessionStatus(
   updates: Partial<Pick<OrchestratorSession, 'lifecycle_status' | 'run_status' | 'runtime_session_id' | 'summary_text' | 'last_run_summary' | 'last_error_summary'>>,
 ): void {
   orchestratorSessionsDb.updateSessionStatus(id, updates);
+
+  if (updates.runtime_session_id !== undefined && updates.runtime_session_id !== null) {
+    resolveRuntimeSessionWaiters(id, updates.runtime_session_id);
+  }
+}
+
+function resolveRuntimeSessionWaiters(sessionId: string, runtimeSessionId: string | null): void {
+  const waiters = runtimeSessionWaiters.get(sessionId);
+  if (!waiters || waiters.length === 0) {
+    return;
+  }
+
+  runtimeSessionWaiters.delete(sessionId);
+  for (const waiter of waiters) {
+    clearTimeout(waiter.timer);
+    waiter.resolve(runtimeSessionId);
+  }
+}
+
+async function waitForRuntimeSessionId(sessionId: string, timeoutMs: number = 10_000): Promise<string | null> {
+  const existing = getSession(sessionId);
+  if (existing?.runtime_session_id) {
+    return existing.runtime_session_id;
+  }
+
+  return await new Promise<string | null>((resolve) => {
+    const timer = setTimeout(() => {
+      const waiters = runtimeSessionWaiters.get(sessionId) ?? [];
+      const remaining = waiters.filter((candidate) => candidate.timer !== timer);
+      if (remaining.length === 0) {
+        runtimeSessionWaiters.delete(sessionId);
+      } else {
+        runtimeSessionWaiters.set(sessionId, remaining);
+      }
+      resolve(null);
+    }, timeoutMs);
+
+    const waiter: RuntimeWaiter = {
+      resolve,
+      timer,
+    };
+    const waiters = runtimeSessionWaiters.get(sessionId) ?? [];
+    waiters.push(waiter);
+    runtimeSessionWaiters.set(sessionId, waiters);
+  });
 }
 
 class SilentSessionWriter {
@@ -368,8 +454,8 @@ export function getSessionTree(project_id: string): SessionTreeNode[] {
 const SESSION_TYPE_ORDER: Record<SessionType, number> = {
   tech_lead: 0,
   feature_lead: 1,
-  worker: 2,
-  ops: 3,
+  ops: 2,
+  worker: 3,
 };
 
 function compareTreeNodes(a: OrchestratorSession, b: OrchestratorSession): number {
@@ -475,8 +561,8 @@ export function onWorkerCompleted(workerSessionId: string, success: boolean, run
   });
 
   if (worker.parent_id) {
-    const summary = `Worker 完成摘要
-Worker: ${worker.title}
+    const summary = `子代理完成摘要
+子代理: ${worker.title}
 结果状态: ${success ? '成功' : '失败'}
 运行摘要: ${runSummary}
 ${errorSummary ? `失败摘要: ${errorSummary}` : ''}`;
@@ -494,7 +580,7 @@ ${errorSummary ? `失败摘要: ${errorSummary}` : ''}`;
 export function getWorkerStartupContext(workerSessionId: string): string {
   const spec = getTaskSpec(workerSessionId);
   if (!spec) return '';
-  return workerStartupMessage(spec);
+  return subagentStartupMessage(spec);
 }
 
 export const ORCHESTRATOR_BOOTSTRAP_OPEN_TAG = '<orchestrator_bootstrap>';
@@ -520,14 +606,16 @@ function extractTaggedSection(content: string, openTag: string, closeTag: string
 export function buildOrchestratorBootstrapPrompt(
   session: OrchestratorSession,
   userCommand: string,
-  workerStartupContext: string = '',
+  startupContext: string = '',
 ): string {
   // Put the task payload first so child sessions surface the actual work before background constraints.
   const bootstrapSections: string[] = [];
-  if (workerStartupContext) {
-    bootstrapSections.push(workerStartupContext);
+  if (startupContext) {
+    bootstrapSections.push(startupContext);
   }
-  bootstrapSections.push(session.system_prompt);
+  if (session.system_prompt) {
+    bootstrapSections.push(session.system_prompt);
+  }
 
   return [
     ORCHESTRATOR_BOOTSTRAP_OPEN_TAG,
@@ -537,6 +625,19 @@ export function buildOrchestratorBootstrapPrompt(
     userCommand,
     ORCHESTRATOR_USER_MESSAGE_CLOSE_TAG,
   ].join('\n');
+}
+
+export function buildSessionStartupMessage(session: OrchestratorSession): string {
+  if (session.type === 'worker') {
+    return getWorkerStartupContext(session.id) || session.goal_and_constraints || '';
+  }
+
+  return featureLeadStartupMessage(session.goal_and_constraints || '请承接上级下发目标。', '');
+}
+
+export function buildSessionInitialCommand(session: OrchestratorSession): string {
+  const startupMessage = buildSessionStartupMessage(session);
+  return buildOrchestratorBootstrapPrompt(session, '', startupMessage);
 }
 
 export function prepareOrchestratorCommand(orchestratorSessionId: string, userCommand: string): string {
@@ -621,6 +722,175 @@ export function registerChildSessionAutoRunExecutor(executor: ChildSessionAutoRu
   childSessionAutoRunExecutor = executor;
 }
 
+async function autoRunSessionUntilRuntimeReady(sessionId: string, timeoutMs: number = 10_000): Promise<string | null> {
+  const session = getSession(sessionId);
+  if (!session || session.auto_run !== 1) {
+    return null;
+  }
+
+  queueChildSessionAutoRun(sessionId);
+  return await waitForRuntimeSessionId(sessionId, timeoutMs);
+}
+
+export async function handleOrchestratorToolCall(
+  toolName: string,
+  input: unknown,
+  parentSessionId: string,
+): Promise<OrchestratorToolCallResult> {
+  logOrchestratorTooling('handleOrchestratorToolCall start', {
+    toolName,
+    parentSessionId,
+  });
+  const parentSession = getSession(parentSessionId);
+  if (!parentSession) {
+    logOrchestratorTooling('parent session missing', {
+      toolName,
+      parentSessionId,
+    });
+    throw new AppError('Parent session not found', {
+      code: 'ORCHESTRATOR_PARENT_NOT_FOUND',
+      statusCode: 404,
+    });
+  }
+
+  const normalized = readToolInputRecord(input) ?? {};
+
+  if (toolName === 'orchestrator_lookup_role') {
+    const roleType = typeof normalized.role_type === 'string' ? normalized.role_type.trim() : '';
+    logOrchestratorTooling('lookup_role request', {
+      parentSessionId,
+      parentType: parentSession.type,
+      roleType,
+    });
+    if (roleType !== 'tech_lead' && roleType !== 'feature_lead' && roleType !== 'ops') {
+      throw new AppError(`Unsupported role_type '${roleType || 'unknown'}'`, {
+        code: 'ORCHESTRATOR_INVALID_ROLE_TYPE',
+        statusCode: 400,
+      });
+    }
+
+    return {
+      requires_response: true,
+      result: {
+        role_type: roleType,
+        prompt: getRolePrompt(roleType),
+      },
+    };
+  }
+
+  if (toolName === 'orchestrator_create_role') {
+    const roleType = typeof normalized.role_type === 'string' ? normalized.role_type.trim() : '';
+    logOrchestratorTooling('create_role request', {
+      parentSessionId,
+      parentType: parentSession.type,
+      parentProjectId: parentSession.project_id,
+      roleType,
+      hasTitle: typeof normalized.title === 'string' && normalized.title.trim().length > 0,
+      hasGoal: typeof normalized.goal === 'string' && normalized.goal.trim().length > 0,
+      hasConstraints: typeof normalized.constraints === 'string' && normalized.constraints.trim().length > 0,
+    });
+    if (roleType !== 'feature_lead') {
+      throw new AppError(`Unsupported role_type '${roleType || 'unknown'}'`, {
+        code: 'ORCHESTRATOR_INVALID_ROLE_TYPE',
+        statusCode: 400,
+      });
+    }
+
+    const title = typeof normalized.title === 'string' ? normalized.title.trim() : '';
+    const goal = typeof normalized.goal === 'string' ? normalized.goal.trim() : '';
+    const constraints = typeof normalized.constraints === 'string' ? normalized.constraints.trim() : '';
+
+    if (!title) {
+      throw new AppError('title is required', {
+        code: 'ORCHESTRATOR_MISSING_TITLE',
+        statusCode: 400,
+      });
+    }
+    if (!goal) {
+      throw new AppError('goal is required', {
+        code: 'ORCHESTRATOR_MISSING_GOAL',
+        statusCode: 400,
+      });
+    }
+    if (!canCreateChild(parentSession.type, roleType)) {
+      logOrchestratorTooling('create_role rejected by derivation rules', {
+        parentSessionId,
+        parentType: parentSession.type,
+        roleType,
+      });
+      throw new AppError(
+        `Session type '${parentSession.type}' cannot create child of type '${roleType}'`,
+        {
+          code: 'ORCHESTRATOR_INVALID_DERIVATION',
+          statusCode: 403,
+        },
+      );
+    }
+
+    const combinedGoal = constraints
+      ? `目标：${goal}\n\n约束：${constraints}`
+      : goal;
+
+    const session = createSession({
+      project_id: parentSession.project_id,
+      parent_id: parentSession.id,
+      type: roleType,
+      title,
+      workspace_path: parentSession.workspace_path ?? undefined,
+      goal_and_constraints: combinedGoal,
+    });
+    logOrchestratorTooling('create_role session created', {
+      parentSessionId,
+      childSessionId: session.id,
+      childType: session.type,
+      provider: session.provider,
+      model: session.model,
+      autoRun: session.auto_run,
+    });
+
+    const runtimeSessionId = await autoRunSessionUntilRuntimeReady(session.id, 10_000);
+    if (!runtimeSessionId) {
+      logOrchestratorTooling('create_role auto-run timed out', {
+        parentSessionId,
+        childSessionId: session.id,
+      });
+      return {
+        requires_response: true,
+        result: {
+          session_id: session.id,
+          role_type: roleType,
+          title: session.title,
+          status: 'timeout',
+        },
+      };
+    }
+
+    logOrchestratorTooling('create_role auto-run bound runtime session', {
+      parentSessionId,
+      childSessionId: session.id,
+      runtimeSessionId,
+    });
+    return {
+      requires_response: true,
+      result: {
+        session_id: session.id,
+        role_type: roleType,
+        title: session.title,
+        runtime_session_id: runtimeSessionId,
+      },
+    };
+  }
+
+  logOrchestratorTooling('unsupported tool requested', {
+    toolName,
+    parentSessionId,
+  });
+  throw new AppError(`Unsupported orchestrator tool '${toolName}'`, {
+    code: 'ORCHESTRATOR_UNSUPPORTED_TOOL',
+    statusCode: 400,
+  });
+}
+
 function readToolInputRecord(toolInput: unknown): Record<string, unknown> | null {
   if (!toolInput) {
     return null;
@@ -678,13 +948,14 @@ function deriveChildSessionType(parentType: SessionType): SessionType | null {
   if (parentType === 'tech_lead') {
     return 'feature_lead';
   }
-  if (parentType === 'feature_lead') {
-    return 'worker';
-  }
   return null;
 }
 
 function isMaterializableTool(toolName: string | null | undefined, toolInput: unknown): boolean {
+  if (isSpawnAgentToolName(toolName)) {
+    return true;
+  }
+
   if (getToolNameVariants(toolName).some((variant) => MATERIALIZABLE_TOOL_NAMES.has(variant))) {
     return true;
   }
@@ -774,6 +1045,24 @@ function deriveExplicitModel(input: Record<string, unknown>): string | undefined
   }
 
   return candidate.trim();
+}
+
+function shouldCreateRoleSession(
+  parentSession: OrchestratorSession,
+  toolName: string | null | undefined,
+  input: Record<string, unknown>,
+): boolean {
+  const explicitRole = [
+    input.session_role,
+    input.orchestrator_role,
+    input.role,
+  ].find((candidate) => typeof candidate === 'string' && candidate.trim());
+
+  if (parentSession.type === 'tech_lead' && typeof explicitRole === 'string' && explicitRole.trim() === 'feature_lead') {
+    return true;
+  }
+
+  return parentSession.type === 'tech_lead' && getToolNameVariants(toolName).some((variant) => variant === 'Task');
 }
 
 type MaterializedChildLookup = {
@@ -871,19 +1160,6 @@ function extractRuntimeSessionId(
   return null;
 }
 
-function buildChildSessionStartupMessage(session: OrchestratorSession): string {
-  if (session.type === 'worker') {
-    return getWorkerStartupContext(session.id) || session.goal_and_constraints || '';
-  }
-
-  return featureLeadStartupMessage(session.goal_and_constraints || '请承接上级下发目标。', '');
-}
-
-function buildChildSessionInitialCommand(session: OrchestratorSession): string {
-  const startupMessage = buildChildSessionStartupMessage(session);
-  return buildOrchestratorBootstrapPrompt(session, '', startupMessage);
-}
-
 async function defaultChildSessionAutoRunExecutor(params: ChildSessionAutoRunParams): Promise<void> {
   const { session, startupMessage } = params;
   const workingDirectory = session.workspace_path || process.cwd();
@@ -967,7 +1243,7 @@ export async function autoRunSession(sessionId: string): Promise<void> {
   }
 
   const executor = childSessionAutoRunExecutor ?? defaultChildSessionAutoRunExecutor;
-  const initialCommand = buildChildSessionInitialCommand(session);
+  const initialCommand = buildSessionInitialCommand(session);
   await executor({
     session,
     startupMessage: initialCommand,
@@ -993,8 +1269,7 @@ export function materializeChildSessionFromTool(
     return null;
   }
 
-  const childType = deriveChildSessionType(parentSession.type);
-  if (!childType || !isMaterializableTool(params.toolName, params.toolInput)) {
+  if (!isMaterializableTool(params.toolName, params.toolInput)) {
     return null;
   }
 
@@ -1022,6 +1297,9 @@ export function materializeChildSessionFromTool(
   if (goalAndConstraints === '待补充目标') {
     return null;
   }
+  const childType = shouldCreateRoleSession(parentSession, params.toolName, input)
+    ? 'feature_lead'
+    : 'worker';
   const title = deriveChildTitle(childType, input);
   const explicitProvider = deriveExplicitProvider(input);
   const explicitModel = deriveExplicitModel(input);

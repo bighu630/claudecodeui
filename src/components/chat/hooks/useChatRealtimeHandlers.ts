@@ -237,8 +237,10 @@ export function useChatRealtimeHandlers({
         if (!newSessionId) break;
 
         const isOrch = isOrchestratorSession(selectedSession);
+        const shouldPromoteOrchestratorSession =
+          isOrch && !selectedRuntimeSessionId && selectedSession?.id !== newSessionId;
 
-        if (!currentSessionId) {
+        if (!currentSessionId || shouldPromoteOrchestratorSession) {
           console.log('Session created with ID:', newSessionId);
           console.log('Existing session ID:', currentSessionId);
           sessionStorage.setItem('pendingSessionId', newSessionId);
@@ -251,7 +253,7 @@ export function useChatRealtimeHandlers({
           );
         }
 
-        if (!isOrch) {
+        if (!isOrch || shouldPromoteOrchestratorSession) {
           onNavigateToSession?.(newSessionId);
         }
         break;

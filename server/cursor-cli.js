@@ -6,7 +6,9 @@ import {
   bindChildRuntimeFromTool,
   bindExternalSessionId,
   finalizeOrchestratorRun,
+  handleOrchestratorToolCall,
   materializeAndBindChildSessionFromTool,
+  tryParseOrchestratorStructuredAction,
   prepareOrchestratorCommand,
 } from './modules/orchestrator/index.js';
 import { notifyRunFailed, notifyRunStopped } from './services/notification-orchestrator.js';
@@ -17,6 +19,41 @@ import { createNormalizedMessage } from './shared/utils.js';
 const spawnFunction = process.platform === 'win32' ? crossSpawn : spawn;
 
 let activeCursorProcesses = new Map(); // Track active processes by session ID
+
+function createOrchestratorToolUseMessage(action, sessionId) {
+  const toolName = action.type === 'lookup_role' ? 'orchestrator_lookup_role' : 'orchestrator_create_role';
+  const toolInput = action.type === 'lookup_role'
+    ? { role_type: action.role_type }
+    : {
+        role_type: action.role_type,
+        title: action.title,
+        goal: action.goal,
+        ...(action.constraints ? { constraints: action.constraints } : {}),
+      };
+
+  return createNormalizedMessage({
+    kind: 'tool_use',
+    toolName,
+    toolInput,
+    toolId: `orchestrator_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    sessionId,
+    provider: 'cursor',
+  });
+}
+
+function createOrchestratorToolResultMessage(toolUseMessage, result, sessionId) {
+  return createNormalizedMessage({
+    kind: 'tool_result',
+    toolId: toolUseMessage.toolId,
+    toolResult: {
+      content: JSON.stringify(result),
+      isError: false,
+      toolUseResult: result,
+    },
+    sessionId,
+    provider: 'cursor',
+  });
+}
 
 const WORKSPACE_TRUST_PATTERNS = [
   /workspace trust required/i,
@@ -101,6 +138,7 @@ async function spawnCursor(command, options = {}, ws) {
       let runSawWorkspaceTrustPrompt = false;
       let stdoutLineBuffer = '';
       let terminalNotificationSent = false;
+      let bufferedAssistantText = '';
 
       const notifyTerminalState = ({ code = null, error = null } = {}) => {
         if (terminalNotificationSent) {
@@ -209,6 +247,10 @@ async function spawnCursor(command, options = {}, ws) {
               if (response.message && response.message.content && response.message.content.length > 0) {
                 const normalized = sessionsService.normalizeMessage('cursor', response, capturedSessionId || sessionId || null);
                 for (const msg of normalized) {
+                  if (options.orchestratorSessionId && (msg.kind === 'text' || msg.kind === 'stream_delta') && typeof msg.content === 'string') {
+                    bufferedAssistantText += msg.content;
+                    continue;
+                  }
                   if (options.orchestratorSessionId && msg.kind === 'tool_use') {
                     materializeAndBindChildSessionFromTool(options.orchestratorSessionId, {
                       toolName: msg.toolName,
@@ -317,6 +359,34 @@ async function spawnCursor(command, options = {}, ws) {
           hasRetriedWithTrust = true;
           runCursorProcess([...args, '--trust'], 'trust-retry');
           return;
+        }
+
+        if (options.orchestratorSessionId) {
+          const sid = capturedSessionId || sessionId || finalSessionId;
+          const action = tryParseOrchestratorStructuredAction(bufferedAssistantText);
+          if (!action || action.type === 'message') {
+            const content = action?.message || bufferedAssistantText.trim();
+            if (content) {
+              ws.send(createNormalizedMessage({ kind: 'text', role: 'assistant', content, sessionId: sid, provider: 'cursor' }));
+            }
+          } else {
+            const toolUseMessage = createOrchestratorToolUseMessage(action, sid);
+            ws.send(toolUseMessage);
+            const toolInput = action.type === 'lookup_role'
+              ? { role_type: action.role_type }
+              : {
+                  role_type: action.role_type,
+                  title: action.title,
+                  goal: action.goal,
+                  ...(action.constraints ? { constraints: action.constraints } : {}),
+                };
+            const toolResult = await handleOrchestratorToolCall(
+              action.type === 'lookup_role' ? 'orchestrator_lookup_role' : 'orchestrator_create_role',
+              toolInput,
+              options.orchestratorSessionId,
+            );
+            ws.send(createOrchestratorToolResultMessage(toolUseMessage, toolResult.result, sid));
+          }
         }
 
         ws.send(createNormalizedMessage({ kind: 'complete', exitCode: code, isNewSession: !sessionId && !!command, sessionId: finalSessionId, provider: 'cursor' }));

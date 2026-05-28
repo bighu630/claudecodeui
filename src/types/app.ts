@@ -1,5 +1,5 @@
 export type LLMProvider = 'claude' | 'cursor' | 'codex' | 'gemini';
-export type ProjectRoleType = 'tech_lead' | 'feature_lead' | 'worker' | 'ops';
+export type ProjectRoleType = 'tech_lead' | 'feature_lead' | 'ops';
 export type ProjectRoleModelConfigEntry = {
   provider: LLMProvider;
   model: string;
