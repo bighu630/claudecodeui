@@ -56,7 +56,7 @@ const packageJsonPath = path.join(APP_ROOT, 'package.json');
 const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
 // Match the runtime fallback in load-env.js so "codeagent status" reports the same default
 // database location that the backend will actually use when no DATABASE_PATH is configured.
-const DEFAULT_DATABASE_PATH = path.join(os.homedir(), '.ai_agent_orchestrator', 'auth.db');
+const DEFAULT_DATABASE_PATH = path.join(os.homedir(), '.codeagent', 'auth.db');
 
 // Load environment variables from .env file if it exists
 function loadEnvFile() {
