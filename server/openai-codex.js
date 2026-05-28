@@ -17,9 +17,11 @@ import { Codex } from '@openai/codex-sdk';
 
 import { notifyRunFailed, notifyRunStopped } from './services/notification-orchestrator.js';
 import {
+  bindChildRuntimeFromTool,
   bindExternalSessionId,
   finalizeOrchestratorRun,
   handleOrchestratorToolCall,
+  materializeAndBindChildSessionFromTool,
   ORCHESTRATOR_ACTION_SCHEMA,
   tryParseOrchestratorStructuredAction,
   prepareOrchestratorCommand,
@@ -27,7 +29,6 @@ import {
 import { providerAuthService, sessionsService } from './modules/providers/index.js';
 import { createNormalizedMessage } from './shared/utils.js';
 
-// Track active sessions
 const activeCodexSessions = new Map();
 
 function logCodexOrchestrator(message, details = {}) {
@@ -35,11 +36,6 @@ function logCodexOrchestrator(message, details = {}) {
   console.log(`[codex][orchestrator] ${message}${payload}`);
 }
 
-/**
- * Map permission mode to Codex SDK options
- * @param {string} permissionMode - 'default', 'acceptEdits', or 'bypassPermissions'
- * @returns {object} - { sandboxMode, approvalPolicy }
- */
 function mapPermissionModeToCodexOptions(permissionMode) {
   switch (permissionMode) {
     case 'acceptEdits':
@@ -96,6 +92,54 @@ function createOrchestratorToolResultMessage(toolUseMessage, result, sessionId) 
   });
 }
 
+function isThinkingResumeReasoningError(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+  return message.includes('reasoning_content') && message.includes('thinking mode');
+}
+
+async function runCodexTurnWithResumeFallback(params) {
+  const {
+    codex,
+    sessionId,
+    threadOptions,
+    resolvedCommand,
+    turnOptions,
+    streamCallbacks,
+    ws,
+  } = params;
+
+  const initialThread = sessionId
+    ? codex.resumeThread(sessionId, threadOptions)
+    : codex.startThread(threadOptions);
+
+  try {
+    return {
+      thread: initialThread,
+      turn: await streamCodexTurn(initialThread, resolvedCommand, turnOptions, streamCallbacks),
+      retryUsed: false,
+    };
+  } catch (error) {
+    if (!sessionId || !isThinkingResumeReasoningError(error)) {
+      throw error;
+    }
+
+    console.warn(`[Codex] Resume failed for ${sessionId}; retrying with continue on the same thread.`, error);
+    sendMessage(ws, createNormalizedMessage({
+      kind: 'status',
+      text: 'resume_retrying_continue',
+      content: 'Codex resume failed for this thinking-mode thread. Retrying automatically with continue on the current session.',
+      sessionId,
+      provider: 'codex',
+    }));
+
+    return {
+      thread: initialThread,
+      turn: await streamCodexTurn(initialThread, 'continue', turnOptions, streamCallbacks),
+      retryUsed: true,
+    };
+  }
+}
+
 export async function streamCodexTurn(thread, input, turnOptions, callbacks = {}) {
   const streamedTurn = await thread.runStreamed(input, turnOptions);
   const items = [];
@@ -140,12 +184,6 @@ export async function streamCodexTurn(thread, input, turnOptions, callbacks = {}
   };
 }
 
-/**
- * Execute a Codex query with streaming
- * @param {string} command - The prompt to send
- * @param {object} options - Options including cwd, sessionId, model, permissionMode
- * @param {WebSocket|object} ws - WebSocket connection or response writer
- */
 export async function queryCodex(command, options = {}, ws) {
   const {
     sessionId,
@@ -172,10 +210,8 @@ export async function queryCodex(command, options = {}, ws) {
 
   try {
     const codexOptions = {};
-    // Initialize Codex SDK
     codex = new Codex(codexOptions);
 
-    // Thread options with sandbox and approval settings
     const threadOptions = {
       workingDirectory,
       skipGitRepoCheck: true,
@@ -183,13 +219,6 @@ export async function queryCodex(command, options = {}, ws) {
       approvalPolicy,
       model
     };
-
-    // Start or resume thread
-    if (sessionId) {
-      thread = codex.resumeThread(sessionId, threadOptions);
-    } else {
-      thread = codex.startThread(threadOptions);
-    }
 
     const registerSession = (id) => {
       if (!id) {
@@ -204,7 +233,6 @@ export async function queryCodex(command, options = {}, ws) {
       });
     };
 
-    // Existing sessions can be tracked immediately; new sessions are tracked after thread.started.
     if (capturedSessionId) {
       registerSession(capturedSessionId);
     }
@@ -217,68 +245,75 @@ export async function queryCodex(command, options = {}, ws) {
       ...(options.orchestratorSessionId ? { outputSchema: ORCHESTRATOR_ACTION_SCHEMA } : {}),
     };
 
-    const turn = await streamCodexTurn(
-      thread,
+    const streamCallbacks = {
+      onThreadStarted: (threadId) => {
+        if (!threadId) {
+          return;
+        }
+
+        capturedSessionId = threadId;
+        registerSession(capturedSessionId);
+
+        if (options.orchestratorSessionId) {
+          bindExternalSessionId(options.orchestratorSessionId, capturedSessionId);
+        }
+
+        if (ws.setSessionId && typeof ws.setSessionId === 'function') {
+          ws.setSessionId(capturedSessionId);
+        }
+
+        if (!sessionId && !sessionCreatedSent) {
+          sessionCreatedSent = true;
+          sendMessage(ws, createNormalizedMessage({ kind: 'session_created', newSessionId: capturedSessionId, sessionId: capturedSessionId, provider: 'codex' }));
+        }
+      },
+      onItemCompleted: (item) => {
+        const normalizedSessionId = capturedSessionId || sessionId || null;
+        if (options.orchestratorSessionId && item.type === 'agent_message') {
+          return;
+        }
+
+        const normalizedMsgs = sessionsService.normalizeMessage('codex', {
+          type: 'item.completed',
+          item,
+        }, normalizedSessionId);
+
+        for (const msg of normalizedMsgs) {
+          if (options.orchestratorSessionId && msg.kind === 'tool_use') {
+            console.log("[DEBUG][codex-handler] -> materializeAndBindChildSessionFromTool toolName=" + msg.toolName + " toolId=" + msg.toolId);
+            materializeAndBindChildSessionFromTool(options.orchestratorSessionId, {
+              toolName: msg.toolName,
+              toolInput: msg.toolInput,
+              toolId: msg.toolId,
+              runtimeInfo:
+                msg.toolUseResult
+                || item.toolUseResult
+                || item.result
+                || null,
+            });
+          }
+          if (options.orchestratorSessionId && msg.kind === 'tool_result') {
+            bindChildRuntimeFromTool(options.orchestratorSessionId, {
+              toolId: msg.toolId,
+              runtimeInfo: msg.toolUseResult,
+            });
+          }
+          sendMessage(ws, msg);
+        }
+      },
+    };
+
+    const runResult = await runCodexTurnWithResumeFallback({
+      codex,
+      sessionId,
+      threadOptions,
       resolvedCommand,
       turnOptions,
-      {
-        onThreadStarted: (threadId) => {
-          if (capturedSessionId || !threadId) {
-            return;
-          }
-
-          capturedSessionId = threadId;
-          registerSession(capturedSessionId);
-
-          if (options.orchestratorSessionId) {
-            bindExternalSessionId(options.orchestratorSessionId, capturedSessionId);
-          }
-
-          if (ws.setSessionId && typeof ws.setSessionId === 'function') {
-            ws.setSessionId(capturedSessionId);
-          }
-
-          if (!sessionId && !sessionCreatedSent) {
-            sessionCreatedSent = true;
-            sendMessage(ws, createNormalizedMessage({ kind: 'session_created', newSessionId: capturedSessionId, sessionId: capturedSessionId, provider: 'codex' }));
-          }
-        },
-        onItemCompleted: (item) => {
-          const normalizedSessionId = capturedSessionId || sessionId || null;
-          if (options.orchestratorSessionId && item.type === 'agent_message') {
-            return;
-          }
-
-          const normalizedMsgs = sessionsService.normalizeMessage('codex', {
-            type: 'item.completed',
-            item,
-          }, normalizedSessionId);
-
-          for (const msg of normalizedMsgs) {
-            if (options.orchestratorSessionId && msg.kind === 'tool_use') {
-              console.log("[DEBUG][codex-handler] -> materializeAndBindChildSessionFromTool toolName=" + msg.toolName + " toolId=" + msg.toolId);
-              materializeAndBindChildSessionFromTool(options.orchestratorSessionId, {
-                toolName: msg.toolName,
-                toolInput: msg.toolInput,
-                toolId: msg.toolId,
-                runtimeInfo:
-                  msg.toolUseResult
-                  || item.toolUseResult
-                  || item.result
-                  || null,
-              });
-            }
-            if (options.orchestratorSessionId && msg.kind === 'tool_result') {
-              bindChildRuntimeFromTool(options.orchestratorSessionId, {
-                toolId: msg.toolId,
-                runtimeInfo: msg.toolUseResult,
-              });
-            }
-            sendMessage(ws, msg);
-          }
-        },
-      },
-    );
+      streamCallbacks,
+      ws,
+    });
+    thread = runResult.thread;
+    const turn = runResult.turn;
 
     const lastUsage = turn.usage;
     const normalizedSessionId = capturedSessionId || sessionId || null;
@@ -334,7 +369,6 @@ export async function queryCodex(command, options = {}, ws) {
       }));
     }
 
-    // Send completion event
     if (!terminalFailure) {
       sendMessage(ws, createNormalizedMessage({
         kind: 'complete',
@@ -380,7 +414,6 @@ export async function queryCodex(command, options = {}, ws) {
         });
       }
 
-      // Check if Codex SDK is available for a clearer error message
       const installed = await providerAuthService.isProviderInstalled('codex');
       const errorContent = !installed
         ? 'Codex CLI is not configured. Please set up authentication first.'
@@ -399,7 +432,6 @@ export async function queryCodex(command, options = {}, ws) {
     }
 
   } finally {
-    // Update session status
     if (capturedSessionId) {
       const session = activeCodexSessions.get(capturedSessionId);
       if (session) {
@@ -409,11 +441,6 @@ export async function queryCodex(command, options = {}, ws) {
   }
 }
 
-/**
- * Abort an active Codex session
- * @param {string} sessionId - Session ID to abort
- * @returns {boolean} - Whether abort was successful
- */
 export function abortCodexSession(sessionId) {
   const session = activeCodexSessions.get(sessionId);
 
@@ -431,20 +458,11 @@ export function abortCodexSession(sessionId) {
   return true;
 }
 
-/**
- * Check if a session is active
- * @param {string} sessionId - Session ID to check
- * @returns {boolean} - Whether session is active
- */
 export function isCodexSessionActive(sessionId) {
   const session = activeCodexSessions.get(sessionId);
   return session?.status === 'running';
 }
 
-/**
- * Get all active sessions
- * @returns {Array} - Array of active session info
- */
 export function getActiveCodexSessions() {
   const sessions = [];
 
@@ -461,18 +479,11 @@ export function getActiveCodexSessions() {
   return sessions;
 }
 
-/**
- * Helper to send message via WebSocket or writer
- * @param {WebSocket|object} ws - WebSocket or response writer
- * @param {object} data - Data to send
- */
 function sendMessage(ws, data) {
   try {
     if (ws.isSSEStreamWriter || ws.isWebSocketWriter) {
-      // Writer handles stringification (SSEStreamWriter or WebSocketWriter)
       ws.send(data);
     } else if (typeof ws.send === 'function') {
-      // Raw WebSocket - stringify here
       ws.send(JSON.stringify(data));
     }
   } catch (error) {
@@ -480,10 +491,9 @@ function sendMessage(ws, data) {
   }
 }
 
-// Clean up old completed sessions periodically
 setInterval(() => {
   const now = Date.now();
-  const maxAge = 30 * 60 * 1000; // 30 minutes
+  const maxAge = 30 * 60 * 1000;
 
   for (const [id, session] of activeCodexSessions.entries()) {
     if (session.status !== 'running') {
@@ -493,4 +503,4 @@ setInterval(() => {
       }
     }
   }
-}, 5 * 60 * 1000); // Every 5 minutes
+}, 5 * 60 * 1000);
